@@ -17,9 +17,36 @@
 - Поддержка **Firefox** (Manifest V3)
 
 ## 📦 Установка
+    Откройте Firefox и перейдите на страницу about:debugging
+    Нажмите Этот Firefox → Загрузить временное дополнение
+    Выберите файл manifest.json из папки расширения
+    Расширение появится в панели инструментов. При следующем запуске браузера его не будет — это нормально для временной загрузки. Чтобы установить навсегда, расширение нужно подписать.
 
 ### Временная установка (для разработки / тестирования)
 1. Скачайте или клонируйте репозиторий:
    ```bash
    git clone https://github.com/your-username/sensitive-file-scanner.git
    cd sensitive-file-scanner
+
+### 🔒 Категории проверяемых файлов (из wordlist.txt)
+    Git: .git/config, HEAD, логи, хуки, ссылки
+    SVN / Mercurial / CVS / Fossil
+    Docker: Dockerfile, docker-compose.yml, .docker/config.json
+    CI/CD: Jenkinsfile, .gitlab-ci.yml, .travis.yml, bitbucket-pipelines.yml
+    Облака: .aws/credentials, .kube/config, gcp-credentials.json, terraform.tfstate
+    Конфиденциальные файлы: .env и его вариации, .htpasswd, wp-config.php, typo3conf/LocalConfiguration.php
+    1С-Битрикс: /bitrix/.settings.php, /bitrix/php_interface/dbconn.php, /bitrix/admin/ и другие
+    Резервные копии: backup.sql, dump.zip, wwwroot.tar.gz
+    IDE и редакторы: .vscode/sftp.json, .idea/workspace.xml
+    Веб-шеллы: shell.php, c99.php, adminer.php
+    Логи: debug.log, error.log, access.log
+    Полный список (~235 путей) можно посмотреть в файле wordlist.txt.
+
+### 📝 Настройка списка путей
+    Все проверяемые пути хранятся в файле wordlist.txt (в корне расширения). Вы можете редактировать его в любом текстовом редакторе.
+    Формат: один путь на строку.
+    Поддерживаются комментарии:
+        # — строка игнорируется
+        // — также игнорируется
+    После изменения файла перезагрузите расширение на странице about:debugging (кнопка «Обновить»).
+    Если wordlist.txt отсутствует или пуст, расширение автоматически использует встроенный список из 30+ самых критичных путей.
