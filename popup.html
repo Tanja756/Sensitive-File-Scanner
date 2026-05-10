@@ -23,6 +23,7 @@
     .status-401, .status-403 { color: darkorange; font-weight: bold; }
     .status-500 { color: red; font-weight: bold; }
     .status-error { color: gray; }
+    #lastScanInfo { font-size: 11px; color: #888; margin-bottom: 5px; }
   </style>
 </head>
 <body>
@@ -32,6 +33,7 @@
     <button id="scanPathBtn">Проверить текущий путь</button>
   </div>
   <div id="status">Ожидание...</div>
+  <div id="lastScanInfo" class="hidden"></div>
   <div id="progressContainer" class="hidden">
     <progress id="progressBar" value="0" max="100"></progress>
     <div id="progressText">0 / 0</div>
@@ -42,6 +44,9 @@
     </thead>
     <tbody></tbody>
   </table>
+  <div id="exportContainer" class="hidden" style="margin-top: 10px;">
+    <button id="exportBtn">📥 Экспорт CSV</button>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>
