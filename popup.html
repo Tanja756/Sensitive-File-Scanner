@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <style>
     body {
-      width: 420px;
+      width: 480px; /* немного расширили для четвёртой колонки */
       font-family: sans-serif;
       padding: 12px;
     }
@@ -24,6 +24,15 @@
     .status-500 { color: red; font-weight: bold; }
     .status-error { color: gray; }
     #lastScanInfo { font-size: 11px; color: #888; margin-bottom: 5px; }
+    .scan-btn {
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-size: 14px;
+      padding: 0 4px;
+      opacity: 0.7;
+    }
+    .scan-btn:hover { opacity: 1; }
   </style>
 </head>
 <body>
@@ -40,7 +49,7 @@
   </div>
   <table id="resultsTable" class="hidden">
     <thead>
-      <tr><th>Путь</th><th>Статус</th><th>Размер</th></tr>
+      <tr><th>Путь</th><th>Статус</th><th>Размер</th><th></th></tr>
     </thead>
     <tbody></tbody>
   </table>

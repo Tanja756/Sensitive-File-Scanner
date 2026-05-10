@@ -131,25 +131,49 @@ browser.runtime.onConnect.addListener((port) => {
   }
 });
 
-async function checkPath(fullUrl, displayPath) {
-  try {
-    console.log(`[bg] fetch: ${fullUrl}`);
-    const response = await fetch(fullUrl, { method: 'GET', redirect: 'manual' });
-    const text = await response.text();
-    console.log(`[bg] fetch ok: ${fullUrl} -> ${response.status}, size ${text.length}`);
-    return {
-      path: displayPath,
-      status: response.status,
-      size: text.length,
-      redirected: response.type === 'opaqueredirect' || response.redirected
-    };
-  } catch (e) {
-    console.error(`[bg] fetch error: ${fullUrl}`, e);
-    return {
-      path: displayPath,
-      status: 'network_error',
-      size: 0,
-      error: e.message
-    };
-  }
+function checkPath(fullUrl, displayPath) {
+  return new Promise((resolve) => {
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', fullUrl, true);
+      xhr.responseType = 'text';
+      xhr.timeout = 10000; // 10 секунд таймаут
+
+      xhr.onload = () => {
+        resolve({
+          path: displayPath,
+          status: xhr.status,
+          size: xhr.responseText.length,
+          redirected: xhr.responseURL !== fullUrl
+        });
+      };
+
+      xhr.onerror = () => {
+        resolve({
+          path: displayPath,
+          status: 'network_error',
+          size: 0,
+          error: 'XHR error'
+        });
+      };
+
+      xhr.ontimeout = () => {
+        resolve({
+          path: displayPath,
+          status: 'network_error',
+          size: 0,
+          error: 'timeout'
+        });
+      };
+
+      xhr.send();
+    } catch (e) {
+      resolve({
+        path: displayPath,
+        status: 'network_error',
+        size: 0,
+        error: e.message
+      });
+    }
+  });
 }

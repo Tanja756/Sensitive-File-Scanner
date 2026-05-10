@@ -1,12 +1,42 @@
 let port = null;
-let currentScanData = null; // { baseUrl, mode, results }
+let currentScanData = null; // { baseUrl, mode, results: [...] }
+let additionalPort = null;
+let additionalButton = null; // кнопка, которая запустила доп. сканирование
+
+// Вспомогательная функция: вычислить полный URL
+function getFullUrl(path, baseUrl, mode) {
+  if (mode === 'path') {
+    const base = baseUrl.endsWith('/') ? baseUrl : baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
+    return new URL(path.startsWith('/') ? path.slice(1) : path, base).href;
+  } else {
+    return new URL(path, baseUrl).href;
+  }
+}
+
+// Обогащаем результат полями fullUrl, baseUrl, mode
+function enrichResult(item, baseUrl, mode) {
+  return {
+    ...item,
+    fullUrl: getFullUrl(item.path, baseUrl, mode),
+    baseUrl: baseUrl,
+    mode: mode
+  };
+}
 
 // Восстановление предыдущих результатов при загрузке
 async function restoreLastResults() {
   const data = await browser.storage.local.get('lastScanResults');
   if (data.lastScanResults) {
     const { baseUrl, mode, results, timestamp } = data.lastScanResults;
-    currentScanData = { baseUrl, mode, results };
+    // Миграция – если результаты старые и нет fullUrl
+    const enrichedResults = results.map(r => {
+      if (!r.fullUrl) {
+        return enrichResult(r, baseUrl, mode);
+      }
+      return r;
+    });
+
+    currentScanData = { baseUrl, mode, results: enrichedResults };
 
     const statusDiv = document.getElementById('status');
     const lastScanInfo = document.getElementById('lastScanInfo');
@@ -15,8 +45,8 @@ async function restoreLastResults() {
     lastScanInfo.textContent = `Предыдущее сканирование: ${new Date(timestamp).toLocaleString()} (${mode})`;
     lastScanInfo.classList.remove('hidden');
 
-    const networkErrors = results.filter(r => r.status === 'network_error' || r.status === 'error');
-    const httpResults = results.filter(r => r.status !== 'network_error' && r.status !== 'error');
+    const networkErrors = enrichedResults.filter(r => r.status === 'network_error' || r.status === 'error');
+    const httpResults = enrichedResults.filter(r => r.status !== 'network_error' && r.status !== 'error');
 
     if (networkErrors.length > 0) {
       statusDiv.innerHTML = `❌ Ошибки сети для ${networkErrors.length} путей (см. консоль)`;
@@ -25,7 +55,7 @@ async function restoreLastResults() {
     const interesting = httpResults.filter(r => r.status !== 404);
     if (interesting.length > 0) {
       statusDiv.innerHTML += `<br>⚠️ Найдено ${interesting.length} потенциально опасных путей:`;
-      displayResults(interesting, baseUrl, mode);
+      displayResults(interesting);
       exportContainer.classList.remove('hidden');
     } else if (networkErrors.length === 0) {
       statusDiv.textContent = '✅ Ничего критичного не найдено.';
@@ -34,7 +64,8 @@ async function restoreLastResults() {
   }
 }
 
-function displayResults(interesting, baseUrl, mode) {
+// Отображение таблицы результатов (принимает массив интересных обогащённых объектов)
+function displayResults(interesting) {
   const resultsTable = document.getElementById('resultsTable');
   const tbody = resultsTable.querySelector('tbody');
   tbody.innerHTML = '';
@@ -49,16 +80,8 @@ function displayResults(interesting, baseUrl, mode) {
     const row = tbody.insertRow();
     const pathCell = row.insertCell();
 
-    let fullUrl;
-    if (mode === 'path') {
-      const base = baseUrl.endsWith('/') ? baseUrl : baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
-      fullUrl = new URL(item.path.startsWith('/') ? item.path.slice(1) : item.path, base).href;
-    } else {
-      fullUrl = new URL(item.path, baseUrl).href;
-    }
-
     const link = document.createElement('a');
-    link.href = fullUrl;
+    link.href = item.fullUrl;
     link.target = '_blank';
     link.textContent = item.path;
     link.style.color = 'inherit';
@@ -68,9 +91,95 @@ function displayResults(interesting, baseUrl, mode) {
     statusCell.textContent = item.status;
     statusCell.className = `status-${item.status}`;
     row.insertCell().textContent = item.size + ' B';
+
+    // Кнопка "Сканировать папку"
+    const actionCell = row.insertCell();
+    const scanBtn = document.createElement('button');
+    scanBtn.className = 'scan-btn';
+    scanBtn.innerHTML = '🔍'; // иконка лупы
+    scanBtn.title = 'Сканировать эту директорию';
+    scanBtn.addEventListener('click', () => {
+      startAdditionalScan(item, scanBtn);
+    });
+    actionCell.appendChild(scanBtn);
   }
 }
 
+// Запуск дополнительного сканирования для родительской директории найденного элемента
+function startAdditionalScan(item, button) {
+  // Вычисляем родительский URL
+  const fullUrl = item.fullUrl;
+  // Определяем родительскую директорию: убираем всё после последнего слеша
+  const parentUrl = fullUrl.substring(0, fullUrl.lastIndexOf('/') + 1);
+  console.log(`[popup] дополнительное сканирование: ${parentUrl}`);
+
+  // Меняем иконку на индикатор загрузки
+  button.innerHTML = '⏳';
+  button.disabled = true;
+  additionalButton = button;
+
+  // Если предыдущий дополнительный порт существует, закрываем
+  if (additionalPort) {
+    additionalPort.disconnect();
+  }
+
+  additionalPort = browser.runtime.connect({ name: "scanner" });
+
+  additionalPort.onMessage.addListener((msg) => {
+    if (msg.type === "progress") {
+      // Можно показывать мини-прогресс, но оставим просто индикатор
+    } else if (msg.type === "result") {
+      // Восстанавливаем иконку
+      button.innerHTML = '🔍';
+      button.disabled = false;
+      additionalButton = null;
+
+      const newResults = msg.results;
+      console.log(`[popup] дополнительное сканирование завершено, получено ${newResults.length} результатов`);
+
+      // Обогащаем новые результаты
+      const enrichedNew = newResults.map(r => enrichResult(r, parentUrl, 'path'));
+
+      // Добавляем в currentScanData.results, избегая дубликатов по fullUrl
+      const existingUrls = new Set(currentScanData.results.map(r => r.fullUrl));
+      let addedCount = 0;
+      for (const enriched of enrichedNew) {
+        if (!existingUrls.has(enriched.fullUrl)) {
+          currentScanData.results.push(enriched);
+          existingUrls.add(enriched.fullUrl);
+          addedCount++;
+        }
+      }
+      console.log(`[popup] добавлено ${addedCount} новых уникальных результатов`);
+
+      // Обновляем отображение – показываем все интересные (не 404) из актуального results
+      const allInteresting = currentScanData.results.filter(
+        r => r.status !== 404 && r.status !== 'network_error' && r.status !== 'error'
+      );
+      displayResults(allInteresting);
+
+      // Сохраняем обновлённые данные в storage
+      const toSave = {
+        baseUrl: currentScanData.baseUrl,
+        mode: currentScanData.mode,
+        results: currentScanData.results,
+        timestamp: Date.now()
+      };
+      browser.storage.local.set({ lastScanResults: toSave });
+
+      // Показываем кнопку экспорта
+      document.getElementById('exportContainer').classList.remove('hidden');
+
+      additionalPort.disconnect();
+      additionalPort = null;
+    }
+  });
+
+  // Запускаем сканирование с parentUrl в режиме path
+  additionalPort.postMessage({ command: "start", url: parentUrl, mode: "path" });
+}
+
+// Основное сканирование
 function startScan(mode) {
   console.log(`[popup] startScan вызван, mode: ${mode}`);
   const statusDiv = document.getElementById('status');
@@ -83,6 +192,16 @@ function startScan(mode) {
 
   // Сброс состояния
   currentScanData = null;
+  if (additionalPort) {
+    additionalPort.disconnect();
+    additionalPort = null;
+  }
+  if (additionalButton) {
+    additionalButton.innerHTML = '🔍';
+    additionalButton.disabled = false;
+    additionalButton = null;
+  }
+
   resultsTable.classList.add('hidden');
   lastScanInfo.classList.add('hidden');
   exportContainer.classList.add('hidden');
@@ -117,10 +236,13 @@ function startScan(mode) {
         progressContainer.classList.add('hidden');
         const results = msg.results;
 
-        currentScanData = { baseUrl, mode, results };
+        // Обогащаем результаты
+        const enriched = results.map(r => enrichResult(r, baseUrl, mode));
 
-        const networkErrors = results.filter(r => r.status === 'network_error' || r.status === 'error');
-        const httpResults = results.filter(r => r.status !== 'network_error' && r.status !== 'error');
+        currentScanData = { baseUrl, mode, results: enriched };
+
+        const networkErrors = enriched.filter(r => r.status === 'network_error' || r.status === 'error');
+        const httpResults = enriched.filter(r => r.status !== 'network_error' && r.status !== 'error');
 
         if (networkErrors.length > 0) {
           statusDiv.innerHTML = `❌ Ошибки сети для ${networkErrors.length} путей (см. консоль)`;
@@ -132,14 +254,14 @@ function startScan(mode) {
         const toSave = {
           baseUrl: baseUrl,
           mode: mode,
-          results: results,
+          results: enriched,
           timestamp: Date.now()
         };
         browser.storage.local.set({ lastScanResults: toSave });
 
         if (interesting.length > 0) {
           statusDiv.innerHTML += `<br>⚠️ Найдено ${interesting.length} потенциально опасных путей:`;
-          displayResults(interesting, baseUrl, mode);
+          displayResults(interesting);
           exportContainer.classList.remove('hidden');
         } else if (networkErrors.length === 0) {
           statusDiv.textContent = '✅ Ничего критичного не найдено.';
@@ -160,26 +282,18 @@ function startScan(mode) {
 // Экспорт CSV
 document.getElementById('exportBtn').addEventListener('click', () => {
   if (!currentScanData) return;
-  const { results, baseUrl, mode } = currentScanData;
-  const rows = [ ['Путь', 'Статус', 'Размер (байт)'] ];
+  const { results } = currentScanData;
+  const rows = [ ['Путь (URL)', 'Статус', 'Размер (байт)'] ];
   for (const item of results) {
-    if (item.status === 'network_error' || item.status === 'error') continue;
-    if (item.status === 404) continue;
-    let fullUrl;
-    if (mode === 'path') {
-      const base = baseUrl.endsWith('/') ? baseUrl : baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
-      fullUrl = new URL(item.path.startsWith('/') ? item.path.slice(1) : item.path, base).href;
-    } else {
-      fullUrl = new URL(item.path, baseUrl).href;
-    }
-    rows.push([fullUrl, item.status, item.size]);
+    if (item.status === 'network_error' || item.status === 'error' || item.status === 404) continue;
+    rows.push([item.fullUrl, item.status, item.size]);
   }
   const csv = rows.map(r => r.join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `scan_${new URL(baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.download = `scan_${new URL(currentScanData.baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 });
