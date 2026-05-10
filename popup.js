@@ -1,7 +1,7 @@
 let port = null;
 let currentScanData = null; // { baseUrl, mode, results: [...] }
 let additionalPort = null;
-let additionalButton = null; // кнопка, которая запустила доп. сканирование
+let additionalButton = null;
 
 // Вспомогательная функция: вычислить полный URL
 function getFullUrl(path, baseUrl, mode) {
@@ -21,6 +21,16 @@ function enrichResult(item, baseUrl, mode) {
     baseUrl: baseUrl,
     mode: mode
   };
+}
+
+// Баннер DEBUG = True
+function checkDebugBanner(results) {
+  const debugBanner = document.getElementById('debugBanner');
+  if (results.some(r => r.debugMode === true)) {
+    debugBanner.classList.remove('hidden');
+  } else {
+    debugBanner.classList.add('hidden');
+  }
 }
 
 // Восстановление предыдущих результатов при загрузке
@@ -57,9 +67,13 @@ async function restoreLastResults() {
       statusDiv.innerHTML += `<br>⚠️ Найдено ${interesting.length} потенциально опасных путей:`;
       displayResults(interesting);
       exportContainer.classList.remove('hidden');
+      checkDebugBanner(enrichedResults);
     } else if (networkErrors.length === 0) {
       statusDiv.textContent = '✅ Ничего критичного не найдено.';
       exportContainer.classList.add('hidden');
+      checkDebugBanner(enrichedResults);
+    } else {
+      checkDebugBanner(enrichedResults);
     }
   }
 }
@@ -157,6 +171,7 @@ function startAdditionalScan(item, button) {
         r => r.status !== 404 && r.status !== 'network_error' && r.status !== 'error'
       );
       displayResults(allInteresting);
+      checkDebugBanner(currentScanData.results);
 
       // Сохраняем обновлённые данные в storage
       const toSave = {
@@ -210,6 +225,7 @@ function startScan(mode) {
   progressBar.max = 100;
   progressText.textContent = '0 / 0';
   statusDiv.textContent = 'Сканирование...';
+  document.getElementById('debugBanner').classList.add('hidden');
 
   browser.storage.local.remove('lastScanResults');
 
@@ -240,6 +256,7 @@ function startScan(mode) {
         const enriched = results.map(r => enrichResult(r, baseUrl, mode));
 
         currentScanData = { baseUrl, mode, results: enriched };
+        checkDebugBanner(enriched);
 
         const networkErrors = enriched.filter(r => r.status === 'network_error' || r.status === 'error');
         const httpResults = enriched.filter(r => r.status !== 'network_error' && r.status !== 'error');
@@ -290,12 +307,11 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   }
   const csv = rows.map(r => r.join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
+  a.href = URL.createObjectURL(blob);
   a.download = `scan_${new URL(currentScanData.baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
-  URL.revokeObjectURL(url);
+  URL.revokeObjectURL(a.href);
 });
 
 // Назначение кнопок

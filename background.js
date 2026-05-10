@@ -137,14 +137,17 @@ function checkPath(fullUrl, displayPath) {
       const xhr = new XMLHttpRequest();
       xhr.open('GET', fullUrl, true);
       xhr.responseType = 'text';
-      xhr.timeout = 10000; // 10 секунд таймаут
+      xhr.timeout = 10000;
 
       xhr.onload = () => {
+        const text = xhr.responseText;
+        const debugDetected = checkForDjangoDebug(text);
         resolve({
           path: displayPath,
           status: xhr.status,
-          size: xhr.responseText.length,
-          redirected: xhr.responseURL !== fullUrl
+          size: text.length,
+          redirected: xhr.responseURL !== fullUrl,
+          debugMode: debugDetected
         });
       };
 
@@ -176,4 +179,17 @@ function checkPath(fullUrl, displayPath) {
       });
     }
   });
+}
+
+function checkForDjangoDebug(text) {
+  if (!text) return false;
+  const markers = [
+    'DEBUG = True',
+    'DJANGO_SETTINGS_MODULE',
+    "You're seeing this error because you have DEBUG = True",
+    'Traceback (most recent call last)',
+    'Request URL:',
+    'Django version:'
+  ];
+  return markers.some(marker => text.includes(marker));
 }
