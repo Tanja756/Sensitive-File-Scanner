@@ -1,16 +1,19 @@
 {
   "manifest_version": 3,
   "name": "Sensitive File Scanner",
-  "version": "1.2",
-  "description": "Проверяет сайт на наличие критичных файлов с прогрессом и поддержкой текущего пути",
-  "permissions": ["activeTab", "storage"],
+  "version": "1.4",
+  "description": "Проверяет сайт на наличие критичных файлов с прогрессом, паузой, темой и настройками",
+  "permissions": ["activeTab", "storage", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["detection.js", "background.js"]
   },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Сканировать сайт"
+  },
+  "options_ui": {
+    "page": "options.html"
   },
   "browser_specific_settings": {
     "gecko": {

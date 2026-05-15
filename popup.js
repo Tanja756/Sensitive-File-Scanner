@@ -2,8 +2,9 @@ let port = null;
 let currentScanData = null; // { baseUrl, mode, results: [...] }
 let additionalPort = null;
 let additionalButton = null;
+let paused = false;
+let currentFilter = 'all';
 
-// Вспомогательная функция: вычислить полный URL
 function getFullUrl(path, baseUrl, mode) {
   if (mode === 'path') {
     const base = baseUrl.endsWith('/') ? baseUrl : baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
@@ -13,7 +14,6 @@ function getFullUrl(path, baseUrl, mode) {
   }
 }
 
-// Обогащаем результат полями fullUrl, baseUrl, mode
 function enrichResult(item, baseUrl, mode) {
   return {
     ...item,
@@ -23,50 +23,76 @@ function enrichResult(item, baseUrl, mode) {
   };
 }
 
-// Баннер DEBUG = True
 function checkDebugBanner(results) {
   const debugBanner = document.getElementById('debugBanner');
-  if (results.some(r => r.debugMode === true)) {
-    debugBanner.classList.remove('hidden');
-  } else {
-    debugBanner.classList.add('hidden');
+  if (debugBanner) {
+    if (results.some(r => r.debugMode === true)) {
+      debugBanner.classList.remove('hidden');
+    } else {
+      debugBanner.classList.add('hidden');
+    }
   }
 }
 
-// Восстановление предыдущих результатов при загрузке
+function initFilters() {
+  const btns = document.querySelectorAll('.filter-btn');
+  btns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      btns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentFilter = btn.dataset.filter;
+      applyFilter();
+    });
+  });
+  const allBtn = document.querySelector('.filter-btn[data-filter="all"]');
+  if (allBtn) allBtn.classList.add('active');
+}
+
+function applyFilter() {
+  if (!currentScanData) return;
+  const results = currentScanData.results;
+  let filtered;
+  if (currentFilter === 'all') {
+    filtered = results.filter(r => r.status !== 404);
+  } else if (currentFilter === 'network_error') {
+    filtered = results.filter(r => r.status === 'network_error' || r.status === 'error');
+  } else {
+    const statuses = currentFilter.split(',').flatMap(s => {
+      if (s === '3xx') return [301, 302, 304];
+      if (s === '500') return [500, 501, 502, 503];
+      return [parseInt(s)];
+    }).filter(s => !isNaN(s));
+    filtered = results.filter(r => statuses.includes(r.status));
+  }
+  displayResults(filtered);
+}
+
 async function restoreLastResults() {
   const data = await browser.storage.local.get('lastScanResults');
   if (data.lastScanResults) {
     const { baseUrl, mode, results, timestamp } = data.lastScanResults;
-    // Миграция – если результаты старые и нет fullUrl
     const enrichedResults = results.map(r => {
-      if (!r.fullUrl) {
-        return enrichResult(r, baseUrl, mode);
-      }
+      if (!r.fullUrl) return enrichResult(r, baseUrl, mode);
       return r;
     });
-
     currentScanData = { baseUrl, mode, results: enrichedResults };
-
     const statusDiv = document.getElementById('status');
     const lastScanInfo = document.getElementById('lastScanInfo');
     const exportContainer = document.getElementById('exportContainer');
-
+    const filtersContainer = document.getElementById('filtersContainer');
     lastScanInfo.textContent = `Предыдущее сканирование: ${new Date(timestamp).toLocaleString()} (${mode})`;
     lastScanInfo.classList.remove('hidden');
-
     const networkErrors = enrichedResults.filter(r => r.status === 'network_error' || r.status === 'error');
     const httpResults = enrichedResults.filter(r => r.status !== 'network_error' && r.status !== 'error');
-
     if (networkErrors.length > 0) {
       statusDiv.innerHTML = `❌ Ошибки сети для ${networkErrors.length} путей (см. консоль)`;
     }
-
     const interesting = httpResults.filter(r => r.status !== 404);
     if (interesting.length > 0) {
       statusDiv.innerHTML += `<br>⚠️ Найдено ${interesting.length} потенциально опасных путей:`;
       displayResults(interesting);
       exportContainer.classList.remove('hidden');
+      if (filtersContainer) filtersContainer.classList.remove('hidden');
       checkDebugBanner(enrichedResults);
     } else if (networkErrors.length === 0) {
       statusDiv.textContent = '✅ Ничего критичного не найдено.';
@@ -78,83 +104,54 @@ async function restoreLastResults() {
   }
 }
 
-// Отображение таблицы результатов (принимает массив интересных обогащённых объектов)
 function displayResults(interesting) {
   const resultsTable = document.getElementById('resultsTable');
   const tbody = resultsTable.querySelector('tbody');
   tbody.innerHTML = '';
   resultsTable.classList.remove('hidden');
-
   interesting.sort((a, b) => {
     const priority = { 200: 1, 301: 2, 302: 2, 401: 3, 403: 3, 500: 4 };
     return (priority[a.status] || 5) - (priority[b.status] || 5);
   });
-
   for (const item of interesting) {
     const row = tbody.insertRow();
     const pathCell = row.insertCell();
-
     const link = document.createElement('a');
     link.href = item.fullUrl;
     link.target = '_blank';
     link.textContent = item.path;
     link.style.color = 'inherit';
     pathCell.appendChild(link);
-
     const statusCell = row.insertCell();
     statusCell.textContent = item.status;
     statusCell.className = `status-${item.status}`;
     row.insertCell().textContent = item.size + ' B';
-
-    // Кнопка "Сканировать папку"
     const actionCell = row.insertCell();
     const scanBtn = document.createElement('button');
     scanBtn.className = 'scan-btn';
-    scanBtn.innerHTML = '🔍'; // иконка лупы
+    scanBtn.innerHTML = '🔍';
     scanBtn.title = 'Сканировать эту директорию';
-    scanBtn.addEventListener('click', () => {
-      startAdditionalScan(item, scanBtn);
-    });
+    scanBtn.addEventListener('click', () => startAdditionalScan(item, scanBtn));
     actionCell.appendChild(scanBtn);
   }
 }
 
-// Запуск дополнительного сканирования для родительской директории найденного элемента
 function startAdditionalScan(item, button) {
-  // Вычисляем родительский URL
   const fullUrl = item.fullUrl;
-  // Определяем родительскую директорию: убираем всё после последнего слеша
   const parentUrl = fullUrl.substring(0, fullUrl.lastIndexOf('/') + 1);
-  console.log(`[popup] дополнительное сканирование: ${parentUrl}`);
-
-  // Меняем иконку на индикатор загрузки
   button.innerHTML = '⏳';
   button.disabled = true;
   additionalButton = button;
-
-  // Если предыдущий дополнительный порт существует, закрываем
-  if (additionalPort) {
-    additionalPort.disconnect();
-  }
-
+  if (additionalPort) additionalPort.disconnect();
   additionalPort = browser.runtime.connect({ name: "scanner" });
-
   additionalPort.onMessage.addListener((msg) => {
     if (msg.type === "progress") {
-      // Можно показывать мини-прогресс, но оставим просто индикатор
     } else if (msg.type === "result") {
-      // Восстанавливаем иконку
       button.innerHTML = '🔍';
       button.disabled = false;
       additionalButton = null;
-
       const newResults = msg.results;
-      console.log(`[popup] дополнительное сканирование завершено, получено ${newResults.length} результатов`);
-
-      // Обогащаем новые результаты
       const enrichedNew = newResults.map(r => enrichResult(r, parentUrl, 'path'));
-
-      // Добавляем в currentScanData.results, избегая дубликатов по fullUrl
       const existingUrls = new Set(currentScanData.results.map(r => r.fullUrl));
       let addedCount = 0;
       for (const enriched of enrichedNew) {
@@ -164,16 +161,10 @@ function startAdditionalScan(item, button) {
           addedCount++;
         }
       }
-      console.log(`[popup] добавлено ${addedCount} новых уникальных результатов`);
-
-      // Обновляем отображение – показываем все интересные (не 404) из актуального results
-      const allInteresting = currentScanData.results.filter(
-        r => r.status !== 404 && r.status !== 'network_error' && r.status !== 'error'
-      );
+      const allInteresting = currentScanData.results.filter(r => r.status !== 404 && r.status !== 'network_error' && r.status !== 'error');
       displayResults(allInteresting);
       checkDebugBanner(currentScanData.results);
-
-      // Сохраняем обновлённые данные в storage
+      applyFilter();
       const toSave = {
         baseUrl: currentScanData.baseUrl,
         mode: currentScanData.mode,
@@ -181,22 +172,16 @@ function startAdditionalScan(item, button) {
         timestamp: Date.now()
       };
       browser.storage.local.set({ lastScanResults: toSave });
-
-      // Показываем кнопку экспорта
       document.getElementById('exportContainer').classList.remove('hidden');
-
+      document.getElementById('filtersContainer').classList.remove('hidden');
       additionalPort.disconnect();
       additionalPort = null;
     }
   });
-
-  // Запускаем сканирование с parentUrl в режиме path
   additionalPort.postMessage({ command: "start", url: parentUrl, mode: "path" });
 }
 
-// Основное сканирование
 function startScan(mode) {
-  console.log(`[popup] startScan вызван, mode: ${mode}`);
   const statusDiv = document.getElementById('status');
   const progressContainer = document.getElementById('progressContainer');
   const progressBar = document.getElementById('progressBar');
@@ -204,34 +189,29 @@ function startScan(mode) {
   const resultsTable = document.getElementById('resultsTable');
   const lastScanInfo = document.getElementById('lastScanInfo');
   const exportContainer = document.getElementById('exportContainer');
+  const filtersContainer = document.getElementById('filtersContainer');
+  const debugBanner = document.getElementById('debugBanner');
+  const pauseBtn = document.getElementById('pauseBtn');
 
-  // Сброс состояния
   currentScanData = null;
-  if (additionalPort) {
-    additionalPort.disconnect();
-    additionalPort = null;
-  }
-  if (additionalButton) {
-    additionalButton.innerHTML = '🔍';
-    additionalButton.disabled = false;
-    additionalButton = null;
-  }
+  paused = false;
+  if (additionalPort) { additionalPort.disconnect(); additionalPort = null; }
+  if (additionalButton) { additionalButton.innerHTML = '🔍'; additionalButton.disabled = false; additionalButton = null; }
+  if (port) { port.disconnect(); port = null; }
 
   resultsTable.classList.add('hidden');
   lastScanInfo.classList.add('hidden');
   exportContainer.classList.add('hidden');
+  if (filtersContainer) filtersContainer.classList.add('hidden');
   progressContainer.classList.remove('hidden');
   progressBar.value = 0;
   progressBar.max = 100;
   progressText.textContent = '0 / 0';
   statusDiv.textContent = 'Сканирование...';
-  document.getElementById('debugBanner').classList.add('hidden');
+  if (debugBanner) debugBanner.classList.add('hidden');
+  if (pauseBtn) { pauseBtn.textContent = '⏸ Пауза'; pauseBtn.classList.remove('hidden'); }
 
   browser.storage.local.remove('lastScanResults');
-
-  if (port) {
-    port.disconnect();
-  }
 
   browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
     let baseUrl;
@@ -240,34 +220,49 @@ function startScan(mode) {
     } else {
       baseUrl = new URL(tab.url).origin;
     }
-
     port = browser.runtime.connect({ name: "scanner" });
-
     port.onMessage.addListener((msg) => {
       if (msg.type === "progress") {
         const percent = Math.round((msg.current / msg.total) * 100);
         progressBar.value = percent;
-        progressText.textContent = `${msg.current} / ${msg.total}`;
+        let text = `${msg.current} / ${msg.total}`;
+        if (msg.rate !== undefined) text += ` (${msg.rate} req/s, ост. ~${msg.eta}с)`;
+        progressText.textContent = text;
       } else if (msg.type === "result") {
         progressContainer.classList.add('hidden');
+        if (pauseBtn) pauseBtn.classList.add('hidden');
         const results = msg.results;
-
-        // Обогащаем результаты
         const enriched = results.map(r => enrichResult(r, baseUrl, mode));
-
         currentScanData = { baseUrl, mode, results: enriched };
         checkDebugBanner(enriched);
 
+        if (msg.securityHeaders) {
+          const secDiv = document.getElementById('securityHeaders');
+          if (secDiv) {
+            const h = msg.securityHeaders;
+            const items = [
+              { name: 'Content-Security-Policy', value: h['Content-Security-Policy'] },
+              { name: 'X-Frame-Options', value: h['X-Frame-Options'] },
+              { name: 'Strict-Transport-Security', value: h['Strict-Transport-Security'] },
+              { name: 'X-Content-Type-Options', value: h['X-Content-Type-Options'] },
+              { name: 'Referrer-Policy', value: h['Referrer-Policy'] }
+            ];
+            let html = '<strong>Security Headers:</strong><ul>';
+            items.forEach(i => {
+              html += `<li>${i.value ? '✅' : '❌'} ${i.name}: ${i.value || 'отсутствует'}</li>`;
+            });
+            html += '</ul>';
+            secDiv.innerHTML = html;
+            secDiv.classList.remove('hidden');
+          }
+        }
+
         const networkErrors = enriched.filter(r => r.status === 'network_error' || r.status === 'error');
         const httpResults = enriched.filter(r => r.status !== 'network_error' && r.status !== 'error');
-
         if (networkErrors.length > 0) {
           statusDiv.innerHTML = `❌ Ошибки сети для ${networkErrors.length} путей (см. консоль)`;
         }
-
         const interesting = httpResults.filter(r => r.status !== 404);
-
-        // Сохраняем в storage
         const toSave = {
           baseUrl: baseUrl,
           mode: mode,
@@ -275,20 +270,20 @@ function startScan(mode) {
           timestamp: Date.now()
         };
         browser.storage.local.set({ lastScanResults: toSave });
-
         if (interesting.length > 0) {
           statusDiv.innerHTML += `<br>⚠️ Найдено ${interesting.length} потенциально опасных путей:`;
           displayResults(interesting);
           exportContainer.classList.remove('hidden');
+          if (filtersContainer) filtersContainer.classList.remove('hidden');
+          applyFilter();
         } else if (networkErrors.length === 0) {
           statusDiv.textContent = '✅ Ничего критичного не найдено.';
         }
-
         port.disconnect();
         port = null;
+      } else if (msg.type === "paused") {
       }
     });
-
     port.postMessage({ command: "start", url: baseUrl, mode: mode });
   }).catch(err => {
     console.error('[popup] ошибка получения вкладки:', err);
@@ -299,7 +294,7 @@ function startScan(mode) {
 // Экспорт CSV
 document.getElementById('exportBtn').addEventListener('click', () => {
   if (!currentScanData) return;
-  const { results } = currentScanData;
+  const { results, baseUrl } = currentScanData;
   const rows = [ ['Путь (URL)', 'Статус', 'Размер (байт)'] ];
   for (const item of results) {
     if (item.status === 'network_error' || item.status === 'error' || item.status === 404) continue;
@@ -309,14 +304,56 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `scan_${new URL(currentScanData.baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.download = `scan_${new URL(baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 });
+
+// Экспорт JSON
+document.getElementById('exportJsonBtn').addEventListener('click', () => {
+  if (!currentScanData) return;
+  const exportData = {
+    scanTime: new Date().toISOString(),
+    baseUrl: currentScanData.baseUrl,
+    mode: currentScanData.mode,
+    results: currentScanData.results.filter(r => r.status !== 404 && r.status !== 'network_error')
+  };
+  const json = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `scan_${new URL(currentScanData.baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// Пауза
+document.getElementById('pauseBtn').addEventListener('click', () => {
+  if (!port) return;
+  paused = !paused;
+  document.getElementById('pauseBtn').textContent = paused ? '▶ Продолжить' : '⏸ Пауза';
+  port.postMessage({ command: "pause", value: paused });
+});
+
+// Тёмная тема
+const themeToggle = document.getElementById('themeToggle');
+if (themeToggle) {
+  const currentTheme = localStorage.getItem('theme') || 'light';
+  if (currentTheme === 'dark') {
+    document.body.classList.add('dark');
+    themeToggle.textContent = '☀️';
+  }
+  themeToggle.addEventListener('click', () => {
+    document.body.classList.toggle('dark');
+    const theme = document.body.classList.contains('dark') ? 'dark' : 'light';
+    localStorage.setItem('theme', theme);
+    themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+  });
+}
 
 // Назначение кнопок
 document.getElementById('scanSiteBtn').addEventListener('click', () => startScan('site'));
 document.getElementById('scanPathBtn').addEventListener('click', () => startScan('path'));
 
-// Восстановление результатов при загрузке
+initFilters();
 restoreLastResults();

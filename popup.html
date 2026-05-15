@@ -3,21 +3,37 @@
 <head>
   <meta charset="utf-8">
   <style>
+    :root {
+      --bg: #ffffff;
+      --text: #000000;
+      --border: #eee;
+      --table-header: #f0f0f0;
+    }
+    body.dark {
+      --bg: #1e1e1e;
+      --text: #e0e0e0;
+      --border: #444;
+      --table-header: #2a2a2a;
+    }
     body {
-      width: 480px; /* немного расширили для четвёртой колонки */
+      width: 520px;
       font-family: sans-serif;
       padding: 12px;
+      background-color: var(--bg);
+      color: var(--text);
     }
     button {
-      padding: 8px 12px;
-      margin: 5px 5px 5px 0;
+      padding: 6px 10px;
+      margin: 4px 4px 4px 0;
+      cursor: pointer;
     }
     .hidden { display: none; }
     #progressContainer { margin: 10px 0; }
     #progressBar { width: 100%; height: 20px; }
-    #progressText { font-size: 12px; color: #555; }
+    #progressText { font-size: 12px; color: #888; }
     table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    td, th { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: left; font-size: 12px; }
+    th { background-color: var(--table-header); }
+    td, th { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; font-size: 12px; }
     .status-200 { color: green; font-weight: bold; }
     .status-301, .status-302 { color: orange; }
     .status-401, .status-403 { color: darkorange; font-weight: bold; }
@@ -33,16 +49,33 @@
       opacity: 0.7;
     }
     .scan-btn:hover { opacity: 1; }
+    .filter-btn { padding: 2px 8px; margin-right: 4px; font-size: 11px; }
+    .filter-btn.active { background: #aaa; color: white; }
+    #debugBanner {
+      background: #ffe0e0;
+      border: 2px solid red;
+      padding: 6px;
+      margin-bottom: 8px;
+      font-weight: bold;
+      color: #b00;
+    }
+    #themeToggle {
+      float: right;
+      background: none;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
+  <button id="themeToggle" title="Переключить тему">🌙</button>
   <h3>🔍 Sensitive Scanner</h3>
-<div id="debugBanner" class="hidden" style="background: #ffe0e0; border: 2px solid red; padding: 6px; margin-bottom: 8px; font-weight: bold; color: #b00;">
-  ⚠️ Django DEBUG.
-</div>
+  <div id="debugBanner" class="hidden">⚠️ Обнаружен режим DEBUG = True! Сервер может раскрывать конфиденциальные данные.</div>
   <div>
     <button id="scanSiteBtn">Проверить сайт</button>
     <button id="scanPathBtn">Проверить текущий путь</button>
+    <button id="pauseBtn" class="hidden">⏸ Пауза</button>
   </div>
   <div id="status">Ожидание...</div>
   <div id="lastScanInfo" class="hidden"></div>
@@ -50,6 +83,16 @@
     <progress id="progressBar" value="0" max="100"></progress>
     <div id="progressText">0 / 0</div>
   </div>
+  <div id="filtersContainer" class="hidden" style="margin: 8px 0;">
+    <strong>Фильтр:</strong>
+    <button class="filter-btn" data-filter="all">Все</button>
+    <button class="filter-btn" data-filter="200">200</button>
+    <button class="filter-btn" data-filter="3xx">3xx</button>
+    <button class="filter-btn" data-filter="401,403">401/403</button>
+    <button class="filter-btn" data-filter="500">500+</button>
+    <button class="filter-btn" data-filter="network_error">Ошибки сети</button>
+  </div>
+  <div id="securityHeaders" class="hidden" style="margin-top:10px;"></div>
   <table id="resultsTable" class="hidden">
     <thead>
       <tr><th>Путь</th><th>Статус</th><th>Размер</th><th></th></tr>
@@ -58,6 +101,7 @@
   </table>
   <div id="exportContainer" class="hidden" style="margin-top: 10px;">
     <button id="exportBtn">📥 Экспорт CSV</button>
+    <button id="exportJsonBtn">📥 Экспорт JSON</button>
   </div>
   <script src="popup.js"></script>
 </body>
