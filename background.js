@@ -38,7 +38,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function getOptions() {
   const opts = await browser.storage.local.get('options');
-  return opts.options || { timeout: 10, batchSize: 10, categories: ['git','docker','cicd','cloud','cms','backup','logs','ide'] };
+  return opts.options || { timeout: 10, batchSize: 10, rateLimit: 0, categories: ['git','docker','cicd','cloud','cms','backup','logs','ide'] };
 }
 
 // Контекстное меню
@@ -74,7 +74,7 @@ function checkPath(fullUrl, displayPath, timeout = 10) {
         }
         resolve({ path: displayPath, status: xhr.status, size: text.length, redirected: xhr.responseURL !== fullUrl, debugMode: debugDetected });
       };
-      xhr.onerror = () => resolve({ path: displayPath, status: 'network_error', size: 0, error: 'XHR error' });
+      xhr.onerror = () => resolve({ path: displayUrl, status: 'network_error', size: 0, error: 'XHR error' });
       xhr.ontimeout = () => resolve({ path: displayPath, status: 'network_error', size: 0, error: 'timeout' });
       xhr.send();
     } catch (e) {
@@ -95,6 +95,7 @@ async function performScan(baseUrl, mode) {
   const options = await getOptions();
   const timeout = options.timeout;
   const batchSize = options.batchSize;
+  const rateLimit = options.rateLimit;
   const total = PATHS.length;
   if (total === 0) return [];
   const results = [];
@@ -116,6 +117,10 @@ async function performScan(baseUrl, mode) {
       const res = batchResults[j];
       results.push(res.status === 'fulfilled' ? res.value : { path: batch[j], status: 'error', size: 0, error: res.reason?.message });
     }
+    // Delay between batches (except after the last batch)
+    if (i + batchSize < total) {
+      await sleep(rateLimit);
+    }
   }
   return results;
 }
@@ -132,6 +137,7 @@ browser.runtime.onConnect.addListener((port) => {
         const options = await getOptions();
         const timeout = options.timeout;
         const batchSize = options.batchSize;
+        const rateLimit = options.rateLimit;
         const total = PATHS.length;
         if (total === 0) {
           port.postMessage({ type: "result", results: [] });
@@ -164,6 +170,10 @@ browser.runtime.onConnect.addListener((port) => {
           const elapsed = (Date.now() - startTime) / 1000;
           const rate = completed / elapsed;
           port.postMessage({ type: "progress", current: completed, total: total, rate: Math.round(rate), eta: Math.round((total - completed) / rate) });
+          // Delay between batches (except after the last batch)
+          if (i + batchSize < total) {
+            await sleep(rateLimit);
+          }
         }
         // Security headers
         let securityHeaders = null;

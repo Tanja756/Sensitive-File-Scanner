@@ -249,3 +249,119 @@
 /node_modules/
 /vendor/
 /tmp/
+
+  // ========== Расширенные облачные и инфраструктурные файлы ==========
+# AWS
+/elasticbeanstalk/
+/cloudformation/
+/stack.yml
+# GCP
+/gcloud/
+/app.yaml
+/app.yml
+# Azure
+/AzureAD/
+/web.config
+# Kubernetes
+/kubernetes/
+/helm/
+/helm.yaml
+/helm.yml
+# Общие
+/.env.local.php
+/.env.php
+/config/local.php
+/config/local.ini
+
+  // ========== Логи и системные файлы ==========
+/var/log/auth.log
+/var/log/syslog
+/var/log/apache2/access.log
+/var/log/apache2/error.log
+/var/log/nginx/access.log
+/var/log/nginx/error.log
+/logs/
+/log/
+/application.log
+/laravel.log
+/storage/logs/laravel.log
+/supervisord.log
+
+  // ========== Резервные копии и архивы ==========
+/backup/
+/db_backup/
+/snapshot/
+/dump/
+/sql/
+/www.zip
+/site.tar.gz
+/backup.tar.bz2
+/backup.tgz
+
+  // ========== Секреты и ключи ==========
+/.pem
+/.key
+/id_rsa
+/id_dsa
+/id_ecdsa
+/id_ed25519
+/.npmrc
+/.yarnrc
+/.netrc
+/.pgpass
+/.my.cnf
+/credentials.json
+/secret.key
+/id_rsa.pub
+/id_dsa.pub
+
+  // ========== Конфигурационные файлы фреймворков ==========
+/config/app.php                 # Laravel
+/application.yml                # Spring Boot
+/application.yaml
+/config/application.yml
+/config/application.yaml
+/settings.yml
+/config/settings.yml
+/config/local.php
+/config/local.ini
+/config/config.php
+/app/etc/local.xml              # Magento 1
+/app/etc/env.php                # Magento 2
+/sites/default/settings.php     # Drupal
+/sites/default/settings.local.php
+/web.config                     # ASP.NET
+/appsettings.json
+/appsettings.Development.json
+/appsettings.Production.json
+
+  // ========== API-документация и отладка ==========
+/swagger-ui.html
+/swagger.json
+/openapi.json
+/api-docs/
+/api/explorer/
+/graphql
+/console
+/actuator/
+/trace
+/env
+/api/env
+/api/debug
+
+  // ========== Разное ==========
+/.gitlab/
+/.github/
+/.bitbucket/
+/.hg/
+/.svn/
+/.cvs/
+/.bzr/
+/.docker/
+/.idea/
+/.vscode/
+/.nbproject/
+/.settings/
+/.classpath
+/.project
+/.buildpath

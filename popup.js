@@ -327,6 +327,70 @@ document.getElementById('exportJsonBtn').addEventListener('click', () => {
   URL.revokeObjectURL(a.href);
 });
 
+// Экспорт HTML
+document.getElementById('exportHtmlBtn').addEventListener('click', () => {
+  if (!currentScanData) return;
+  const { results, baseUrl, mode } = currentScanData;
+  const interesting = results.filter(r => r.status !== 404 && r.status !== 'network_error' && r.status !== 'error');
+  // Generate HTML
+  const html = `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Отчёт сканирования Sensitive File Scanner</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    h1 { color: #2c3e50; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+    th { background-color: #f2f2f2; }
+    .status-200 { color: green; font-weight: bold; }
+    .status-301, .status-302 { color: orange; }
+    .status-401, .status-403 { color: darkorange; font-weight: bold; }
+    .status-500 { color: red; font-weight: bold; }
+    .status-error { color: gray; }
+    .meta { margin-bottom: 10px; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Отчёт сканирования Sensitive File Scanner</h1>
+  <div class="meta">
+    <strong>Дата сканирования:</strong> ${new Date().toLocaleString()}<br>
+    <strong>Базовый URL:</strong> ${baseUrl}<br>
+    <strong>Режим:</strong> ${mode === 'site' ? 'Сайт' : 'Текущий путь'}
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Путь</th>
+        <th>Полный URL</th>
+        <th>Статус</th>
+        <th>Размер (байт)</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${interesting.map(item => `
+        <tr>
+          <td>${item.path}</td>
+          <td><a href="${item.fullUrl}" target="_blank">${item.fullUrl}</a></td>
+          <td class="status-${item.status}">${item.status}</td>
+          <td>${item.size}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+</body>
+</html>
+  `.trim();
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `scan_${new URL(baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.html`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 // Пауза
 document.getElementById('pauseBtn').addEventListener('click', () => {
   if (!port) return;
