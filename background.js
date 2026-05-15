@@ -1,3 +1,24 @@
+// Import detection module
+// In Firefox extension context, we need to load it differently
+let detectionModule = null;
+
+async function loadDetectionModule() {
+  if (detectionModule) return detectionModule;
+
+  try {
+    const url = browser.runtime.getURL('detection.js');
+    const response = await fetch(url);
+    const text = await response.text();
+    // Create a function from the text and execute it to get the exports
+    const moduleFunction = new Function(text + '\nreturn { detectTechnologies, detectAPIEndpoints, analyzeVulnerabilities, getSeverityColor, getSeverityLabel };');
+    detectionModule = moduleFunction();
+    return detectionModule;
+  } catch (e) {
+    console.error('[bg] ошибка загрузки detection.js:', e);
+    return null;
+  }
+}
+
 let PATHS = [];
 let pathsLoaded = false;
 let loadingPromise = null;
@@ -139,15 +160,24 @@ function checkPath(fullUrl, displayPath) {
       xhr.responseType = 'text';
       xhr.timeout = 10000;
 
-      xhr.onload = () => {
+      xhr.onload = async () => {
         const text = xhr.responseText;
         const debugDetected = checkForDjangoDebug(text);
+
+        // Load detection module and analyze vulnerabilities
+        const detection = await loadDetectionModule();
+        let vulnerabilities = [];
+        if (detection && xhr.status !== 404) {
+          vulnerabilities = detection.analyzeVulnerabilities(displayPath, text, xhr.status);
+        }
+
         resolve({
           path: displayPath,
           status: xhr.status,
           size: text.length,
           redirected: xhr.responseURL !== fullUrl,
-          debugMode: debugDetected
+          debugMode: debugDetected,
+          vulnerabilities: vulnerabilities
         });
       };
 
@@ -156,7 +186,8 @@ function checkPath(fullUrl, displayPath) {
           path: displayPath,
           status: 'network_error',
           size: 0,
-          error: 'XHR error'
+          error: 'XHR error',
+          vulnerabilities: []
         });
       };
 
@@ -165,7 +196,8 @@ function checkPath(fullUrl, displayPath) {
           path: displayPath,
           status: 'network_error',
           size: 0,
-          error: 'timeout'
+          error: 'timeout',
+          vulnerabilities: []
         });
       };
 
@@ -175,7 +207,8 @@ function checkPath(fullUrl, displayPath) {
         path: displayPath,
         status: 'network_error',
         size: 0,
-        error: e.message
+        error: e.message,
+        vulnerabilities: []
       });
     }
   });
