@@ -3,24 +3,60 @@
 <head>
   <meta charset="utf-8">
   <title>Настройки Sensitive Scanner</title>
+  <style>
+    body { font-family: sans-serif; max-width: 640px; margin: 20px; }
+    label { display: block; margin: 8px 0; }
+    fieldset { margin: 16px 0; }
+    textarea { width: 100%; font-family: monospace; font-size: 12px; }
+    .hint { font-size: 12px; color: #666; }
+    #wordlistStatus { font-size: 12px; margin-top: 4px; }
+  </style>
 </head>
 <body>
   <h2>Настройки сканера</h2>
-  <label>Таймаут запроса (сек): <input type="number" id="timeout" min="1" max="30" value="10"></label><br><br>
-  <label>Одновременных запросов: <input type="number" id="batchSize" min="1" max="20" value="10"></label><br><br>
-  <label>Задержка между пакетами (мс): <input type="number" id="rateLimit" min="0" max="5000" value="0"></label><br><br>
+
+  <label>Таймаут запроса (сек):
+    <input type="number" id="timeout" min="1" max="30" value="10">
+  </label>
+  <label>Одновременных запросов:
+    <input type="number" id="batchSize" min="1" max="20" value="10">
+  </label>
+  <label>Задержка между пакетами (мс):
+    <input type="number" id="rateLimit" min="0" max="5000" value="0">
+  </label>
+  <label>
+    <input type="checkbox" id="useHead" checked>
+    Сначала HEAD, затем GET при необходимости (меньше трафика)
+  </label>
+
   <fieldset>
     <legend>Категории путей</legend>
-    <label><input type="checkbox" class="category" data-cat="git" checked> Git</label><br>
-    <label><input type="checkbox" class="category" data-cat="docker" checked> Docker</label><br>
-    <label><input type="checkbox" class="category" data-cat="cicd" checked> CI/CD</label><br>
-    <label><input type="checkbox" class="category" data-cat="cloud" checked> Cloud</label><br>
-    <label><input type="checkbox" class="category" data-cat="cms" checked> CMS</label><br>
-    <label><input type="checkbox" class="category" data-cat="backup" checked> Backups</label><br>
-    <label><input type="checkbox" class="category" data-cat="logs" checked> Logs</label><br>
+    <p class="hint">Категории определяются по секциям в wordlist.txt. Пути без секции классифицируются автоматически.</p>
+    <label><input type="checkbox" class="category" data-cat="git" checked> Git / VCS</label>
+    <label><input type="checkbox" class="category" data-cat="docker" checked> Docker</label>
+    <label><input type="checkbox" class="category" data-cat="cicd" checked> CI/CD</label>
+    <label><input type="checkbox" class="category" data-cat="cloud" checked> Cloud / ENV</label>
+    <label><input type="checkbox" class="category" data-cat="cms" checked> CMS / Admin</label>
+    <label><input type="checkbox" class="category" data-cat="backup" checked> Backups</label>
+    <label><input type="checkbox" class="category" data-cat="logs" checked> Logs</label>
     <label><input type="checkbox" class="category" data-cat="ide" checked> IDE</label>
   </fieldset>
-  <br>
+
+  <fieldset>
+    <legend>Пользовательский wordlist</legend>
+    <p class="hint">Один путь на строку. Комментарии: # или //. Секции: // ========== GIT ==========</p>
+    <label>
+      <input type="checkbox" id="useCustomOnly">
+      Использовать только пользовательский список (без встроенного)
+    </label>
+    <textarea id="customWordlist" rows="10" placeholder="/my-secret/path&#10;/custom.env"></textarea>
+    <div>
+      <input type="file" id="wordlistFile" accept=".txt,text/plain">
+      <button type="button" id="clearCustomBtn">Очистить</button>
+    </div>
+    <div id="wordlistStatus"></div>
+  </fieldset>
+
   <button id="saveBtn">Сохранить</button>
   <div id="status"></div>
   <script src="options.js"></script>

@@ -1,44 +1,80 @@
 let port = null;
-let currentScanData = null; // { baseUrl, mode, results: [...] }
+let currentScanData = null;
 let additionalPort = null;
 let additionalButton = null;
 let paused = false;
 let currentFilter = 'all';
 
+const SEV_LABELS = { critical: 'CRIT', high: 'HIGH', medium: 'MED', low: 'LOW', info: 'INFO' };
+
 function getFullUrl(path, baseUrl, mode) {
-  if (mode === 'path') {
-    const base = baseUrl.endsWith('/') ? baseUrl : baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
-    return new URL(path.startsWith('/') ? path.slice(1) : path, base).href;
-  } else {
-    return new URL(path, baseUrl).href;
-  }
+  return buildUrl(path, baseUrl, mode);
 }
 
 function enrichResult(item, baseUrl, mode) {
+  const severity = item.severity || getPathSeverity(item.path);
   return {
     ...item,
+    severity,
     fullUrl: getFullUrl(item.path, baseUrl, mode),
-    baseUrl: baseUrl,
-    mode: mode
+    baseUrl,
+    mode
   };
+}
+
+function isInteresting(r) {
+  if (r.interesting === false || r.soft404 || r.likelyFalsePositive) return false;
+  if (r.status === 404 || r.status === 'network_error' || r.status === 'error') return false;
+  return true;
+}
+
+function getInterestingResults(results) {
+  return results.filter(isInteresting);
 }
 
 function checkDebugBanner(results) {
   const debugBanner = document.getElementById('debugBanner');
-  if (debugBanner) {
-    if (results.some(r => r.debugMode === true)) {
-      debugBanner.classList.remove('hidden');
-    } else {
-      debugBanner.classList.add('hidden');
-    }
+  if (!debugBanner) return;
+  if (results.some(r => r.debugMode === true)) {
+    debugBanner.classList.remove('hidden');
+  } else {
+    debugBanner.classList.add('hidden');
   }
 }
 
+function renderDetectionPanel(analysis) {
+  const panel = document.getElementById('detectionPanel');
+  if (!panel) return;
+  if (!analysis || ((!analysis.detectedTech || analysis.detectedTech.length === 0) &&
+      (!analysis.vulnerabilities || analysis.vulnerabilities.length === 0))) {
+    panel.classList.add('hidden');
+    panel.innerHTML = '';
+    return;
+  }
+  let html = '';
+  if (analysis.detectedTech && analysis.detectedTech.length > 0) {
+    html += '<strong>Технологии:</strong><ul>';
+    for (const t of analysis.detectedTech) {
+      html += `<li>${t.name} <span class="meta-text">(${t.confidence})</span></li>`;
+    }
+    html += '</ul>';
+  }
+  if (analysis.vulnerabilities && analysis.vulnerabilities.length > 0) {
+    html += '<strong>Уязвимости:</strong><ul>';
+    for (const v of analysis.vulnerabilities) {
+      const meta = VULN_LABELS[v] || { label: v, severity: 'medium' };
+      html += `<li class="vuln-item sev-${meta.severity}">${meta.label}</li>`;
+    }
+    html += '</ul>';
+  }
+  panel.innerHTML = html;
+  panel.classList.remove('hidden');
+}
+
 function initFilters() {
-  const btns = document.querySelectorAll('.filter-btn');
-  btns.forEach(btn => {
+  document.querySelectorAll('.filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      btns.forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentFilter = btn.dataset.filter;
       applyFilter();
@@ -50,71 +86,49 @@ function initFilters() {
 
 function applyFilter() {
   if (!currentScanData) return;
-  const results = currentScanData.results;
   let filtered;
+  const results = currentScanData.results;
   if (currentFilter === 'all') {
-    filtered = results.filter(r => r.status !== 404);
+    filtered = getInterestingResults(results);
   } else if (currentFilter === 'network_error') {
     filtered = results.filter(r => r.status === 'network_error' || r.status === 'error');
   } else {
     const statuses = currentFilter.split(',').flatMap(s => {
       if (s === '3xx') return [301, 302, 304];
       if (s === '500') return [500, 501, 502, 503];
-      return [parseInt(s)];
+      return [parseInt(s, 10)];
     }).filter(s => !isNaN(s));
     filtered = results.filter(r => statuses.includes(r.status));
   }
   displayResults(filtered);
 }
 
-async function restoreLastResults() {
-  const data = await browser.storage.local.get('lastScanResults');
-  if (data.lastScanResults) {
-    const { baseUrl, mode, results, timestamp } = data.lastScanResults;
-    const enrichedResults = results.map(r => {
-      if (!r.fullUrl) return enrichResult(r, baseUrl, mode);
-      return r;
-    });
-    currentScanData = { baseUrl, mode, results: enrichedResults };
-    const statusDiv = document.getElementById('status');
-    const lastScanInfo = document.getElementById('lastScanInfo');
-    const exportContainer = document.getElementById('exportContainer');
-    const filtersContainer = document.getElementById('filtersContainer');
-    lastScanInfo.textContent = `Предыдущее сканирование: ${new Date(timestamp).toLocaleString()} (${mode})`;
-    lastScanInfo.classList.remove('hidden');
-    const networkErrors = enrichedResults.filter(r => r.status === 'network_error' || r.status === 'error');
-    const httpResults = enrichedResults.filter(r => r.status !== 'network_error' && r.status !== 'error');
-    if (networkErrors.length > 0) {
-      statusDiv.innerHTML = `❌ Ошибки сети для ${networkErrors.length} путей (см. консоль)`;
-    }
-    const interesting = httpResults.filter(r => r.status !== 404);
-    if (interesting.length > 0) {
-      statusDiv.innerHTML += `<br>⚠️ Найдено ${interesting.length} потенциально опасных путей:`;
-      displayResults(interesting);
-      exportContainer.classList.remove('hidden');
-      if (filtersContainer) filtersContainer.classList.remove('hidden');
-      checkDebugBanner(enrichedResults);
-    } else if (networkErrors.length === 0) {
-      statusDiv.textContent = '✅ Ничего критичного не найдено.';
-      exportContainer.classList.add('hidden');
-      checkDebugBanner(enrichedResults);
-    } else {
-      checkDebugBanner(enrichedResults);
-    }
-  }
+function sortBySeverity(items) {
+  return items.slice().sort((a, b) => {
+    const sa = SEVERITY_ORDER[a.severity] ?? 5;
+    const sb = SEVERITY_ORDER[b.severity] ?? 5;
+    if (sa !== sb) return sa - sb;
+    const priority = { 200: 1, 301: 2, 302: 2, 401: 3, 403: 3, 500: 4 };
+    return (priority[a.status] || 5) - (priority[b.status] || 5);
+  });
 }
 
 function displayResults(interesting) {
   const resultsTable = document.getElementById('resultsTable');
   const tbody = resultsTable.querySelector('tbody');
   tbody.innerHTML = '';
+  if (interesting.length === 0) {
+    resultsTable.classList.add('hidden');
+    return;
+  }
   resultsTable.classList.remove('hidden');
-  interesting.sort((a, b) => {
-    const priority = { 200: 1, 301: 2, 302: 2, 401: 3, 403: 3, 500: 4 };
-    return (priority[a.status] || 5) - (priority[b.status] || 5);
-  });
-  for (const item of interesting) {
+  for (const item of sortBySeverity(interesting)) {
     const row = tbody.insertRow();
+    const sevCell = row.insertCell();
+    const sev = item.severity || 'medium';
+    sevCell.textContent = SEV_LABELS[sev] || sev.toUpperCase();
+    sevCell.className = `sev-${sev}`;
+    sevCell.title = sev;
     const pathCell = row.insertCell();
     const link = document.createElement('a');
     link.href = item.fullUrl;
@@ -136,6 +150,113 @@ function displayResults(interesting) {
   }
 }
 
+function showScanResults(data, statusMessage) {
+  const statusDiv = document.getElementById('status');
+  const exportContainer = document.getElementById('exportContainer');
+  const filtersContainer = document.getElementById('filtersContainer');
+  const lastScanInfo = document.getElementById('lastScanInfo');
+
+  currentScanData = data;
+  checkDebugBanner(data.results);
+  renderDetectionPanel(data.analysis);
+
+  if (data.timestamp) {
+    lastScanInfo.textContent = `Скан: ${new Date(data.timestamp).toLocaleString()} (${data.mode}) — ${data.findingsCount ?? getInterestingResults(data.results).length} находок`;
+    lastScanInfo.classList.remove('hidden');
+  }
+
+  const networkErrors = data.results.filter(r => r.status === 'network_error' || r.status === 'error');
+  const interesting = getInterestingResults(data.results);
+
+  if (statusMessage) {
+    statusDiv.innerHTML = statusMessage;
+  } else if (networkErrors.length > 0) {
+    statusDiv.innerHTML = `❌ Ошибки сети: ${networkErrors.length}`;
+  } else {
+    statusDiv.innerHTML = '';
+  }
+
+  if (interesting.length > 0) {
+    statusDiv.innerHTML += `${statusDiv.innerHTML ? '<br>' : ''}⚠️ Найдено ${interesting.length} потенциально опасных путей:`;
+    displayResults(interesting);
+    exportContainer.classList.remove('hidden');
+    filtersContainer.classList.remove('hidden');
+    applyFilter();
+  } else if (networkErrors.length === 0) {
+    statusDiv.textContent = '✅ Ничего критичного не найдено.';
+    document.getElementById('resultsTable').classList.add('hidden');
+    exportContainer.classList.add('hidden');
+    filtersContainer.classList.add('hidden');
+  }
+}
+
+async function loadHistorySelect() {
+  const { scanHistory = [] } = await browser.storage.local.get('scanHistory');
+  const select = document.getElementById('historySelect');
+  const current = select.value;
+  select.innerHTML = '<option value="">— выберите скан —</option>';
+  for (const h of scanHistory) {
+    const host = (() => { try { return new URL(h.baseUrl).hostname; } catch (e) { return h.baseUrl; } })();
+    const opt = document.createElement('option');
+    opt.value = h.id;
+    opt.textContent = `${new Date(h.timestamp).toLocaleString()} — ${host} (${h.mode}, ${h.findingsCount} находок)`;
+    select.appendChild(opt);
+  }
+  if (current) select.value = current;
+}
+
+async function restoreLastResults() {
+  await loadHistorySelect();
+  const data = await browser.storage.local.get('lastScanResults');
+  if (!data.lastScanResults) return;
+  const { baseUrl, mode, results, timestamp, analysis } = data.lastScanResults;
+  const enriched = results.map(r => r.fullUrl ? r : enrichResult(r, baseUrl, mode));
+  showScanResults({
+    baseUrl, mode, results: enriched, timestamp,
+    analysis: analysis || analyzeAll(enriched),
+    findingsCount: getInterestingResults(enriched).length
+  });
+}
+
+function handleScanComplete(msg, baseUrl, mode) {
+  const progressContainer = document.getElementById('progressContainer');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  progressContainer.classList.add('hidden');
+  pauseBtn.classList.add('hidden');
+  stopBtn.classList.add('hidden');
+
+  const enriched = msg.results.map(r => enrichResult(r, baseUrl, mode));
+  const analysis = msg.analysis || analyzeAll(enriched);
+  const findingsCount = getInterestingResults(enriched).length;
+
+  let statusMsg = '';
+  if (msg.stopped) statusMsg = '⏹ Сканирование остановлено. ';
+  if (msg.securityHeaders) renderSecurityHeaders(msg.securityHeaders);
+
+  showScanResults({ baseUrl, mode, results: enriched, analysis, timestamp: Date.now(), findingsCount }, statusMsg);
+  loadHistorySelect();
+}
+
+function renderSecurityHeaders(h) {
+  const secDiv = document.getElementById('securityHeaders');
+  if (!secDiv) return;
+  const items = [
+    { name: 'Content-Security-Policy', value: h['Content-Security-Policy'] },
+    { name: 'X-Frame-Options', value: h['X-Frame-Options'] },
+    { name: 'Strict-Transport-Security', value: h['Strict-Transport-Security'] },
+    { name: 'X-Content-Type-Options', value: h['X-Content-Type-Options'] },
+    { name: 'Referrer-Policy', value: h['Referrer-Policy'] }
+  ];
+  let html = '<strong>Security Headers:</strong><ul>';
+  items.forEach(i => {
+    html += `<li>${i.value ? '✅' : '❌'} ${i.name}: ${i.value || 'отсутствует'}</li>`;
+  });
+  html += '</ul>';
+  secDiv.innerHTML = html;
+  secDiv.classList.remove('hidden');
+}
+
 function startAdditionalScan(item, button) {
   const fullUrl = item.fullUrl;
   const parentUrl = fullUrl.substring(0, fullUrl.lastIndexOf('/') + 1);
@@ -143,267 +264,177 @@ function startAdditionalScan(item, button) {
   button.disabled = true;
   additionalButton = button;
   if (additionalPort) additionalPort.disconnect();
-  additionalPort = browser.runtime.connect({ name: "scanner" });
+  additionalPort = browser.runtime.connect({ name: 'scanner' });
   additionalPort.onMessage.addListener((msg) => {
-    if (msg.type === "progress") {
-    } else if (msg.type === "result") {
+    if (msg.type === 'result') {
       button.innerHTML = '🔍';
       button.disabled = false;
       additionalButton = null;
-      const newResults = msg.results;
-      const enrichedNew = newResults.map(r => enrichResult(r, parentUrl, 'path'));
+      const enrichedNew = msg.results.map(r => enrichResult(r, parentUrl, 'path'));
       const existingUrls = new Set(currentScanData.results.map(r => r.fullUrl));
-      let addedCount = 0;
       for (const enriched of enrichedNew) {
         if (!existingUrls.has(enriched.fullUrl)) {
           currentScanData.results.push(enriched);
           existingUrls.add(enriched.fullUrl);
-          addedCount++;
         }
       }
-      const allInteresting = currentScanData.results.filter(r => r.status !== 404 && r.status !== 'network_error' && r.status !== 'error');
-      displayResults(allInteresting);
-      checkDebugBanner(currentScanData.results);
-      applyFilter();
-      const toSave = {
-        baseUrl: currentScanData.baseUrl,
-        mode: currentScanData.mode,
-        results: currentScanData.results,
-        timestamp: Date.now()
-      };
-      browser.storage.local.set({ lastScanResults: toSave });
-      document.getElementById('exportContainer').classList.remove('hidden');
-      document.getElementById('filtersContainer').classList.remove('hidden');
+      currentScanData.analysis = analyzeAll(currentScanData.results);
+      showScanResults(currentScanData);
       additionalPort.disconnect();
       additionalPort = null;
     }
   });
-  additionalPort.postMessage({ command: "start", url: parentUrl, mode: "path" });
+  additionalPort.postMessage({ command: 'start', url: parentUrl, mode: 'path', skipSave: false });
+}
+
+function resetScanUI() {
+  document.getElementById('resultsTable').classList.add('hidden');
+  document.getElementById('lastScanInfo').classList.add('hidden');
+  document.getElementById('exportContainer').classList.add('hidden');
+  document.getElementById('filtersContainer').classList.add('hidden');
+  document.getElementById('detectionPanel').classList.add('hidden');
+  document.getElementById('securityHeaders').classList.add('hidden');
+  document.getElementById('progressContainer').classList.remove('hidden');
+  document.getElementById('progressBar').value = 0;
+  document.getElementById('progressText').textContent = '0 / 0';
+  document.getElementById('status').textContent = 'Сканирование...';
+  document.getElementById('debugBanner').classList.add('hidden');
+  document.getElementById('pauseBtn').textContent = '⏸ Пауза';
+  document.getElementById('pauseBtn').classList.remove('hidden');
+  document.getElementById('stopBtn').classList.remove('hidden');
+  document.getElementById('stopBtn').disabled = false;
 }
 
 function startScan(mode) {
-  const statusDiv = document.getElementById('status');
-  const progressContainer = document.getElementById('progressContainer');
-  const progressBar = document.getElementById('progressBar');
-  const progressText = document.getElementById('progressText');
-  const resultsTable = document.getElementById('resultsTable');
-  const lastScanInfo = document.getElementById('lastScanInfo');
-  const exportContainer = document.getElementById('exportContainer');
-  const filtersContainer = document.getElementById('filtersContainer');
-  const debugBanner = document.getElementById('debugBanner');
-  const pauseBtn = document.getElementById('pauseBtn');
-
   currentScanData = null;
   paused = false;
   if (additionalPort) { additionalPort.disconnect(); additionalPort = null; }
   if (additionalButton) { additionalButton.innerHTML = '🔍'; additionalButton.disabled = false; additionalButton = null; }
   if (port) { port.disconnect(); port = null; }
-
-  resultsTable.classList.add('hidden');
-  lastScanInfo.classList.add('hidden');
-  exportContainer.classList.add('hidden');
-  if (filtersContainer) filtersContainer.classList.add('hidden');
-  progressContainer.classList.remove('hidden');
-  progressBar.value = 0;
-  progressBar.max = 100;
-  progressText.textContent = '0 / 0';
-  statusDiv.textContent = 'Сканирование...';
-  if (debugBanner) debugBanner.classList.add('hidden');
-  if (pauseBtn) { pauseBtn.textContent = '⏸ Пауза'; pauseBtn.classList.remove('hidden'); }
-
-  browser.storage.local.remove('lastScanResults');
+  resetScanUI();
 
   browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-    let baseUrl;
-    if (mode === 'path') {
-      baseUrl = tab.url;
-    } else {
-      baseUrl = new URL(tab.url).origin;
-    }
-    port = browser.runtime.connect({ name: "scanner" });
+    const baseUrl = mode === 'path' ? tab.url : new URL(tab.url).origin;
+    port = browser.runtime.connect({ name: 'scanner' });
     port.onMessage.addListener((msg) => {
-      if (msg.type === "progress") {
+      if (msg.type === 'progress') {
         const percent = Math.round((msg.current / msg.total) * 100);
-        progressBar.value = percent;
+        document.getElementById('progressBar').value = percent;
         let text = `${msg.current} / ${msg.total}`;
         if (msg.rate !== undefined) text += ` (${msg.rate} req/s, ост. ~${msg.eta}с)`;
-        progressText.textContent = text;
-      } else if (msg.type === "result") {
-        progressContainer.classList.add('hidden');
-        if (pauseBtn) pauseBtn.classList.add('hidden');
-        const results = msg.results;
-        const enriched = results.map(r => enrichResult(r, baseUrl, mode));
-        currentScanData = { baseUrl, mode, results: enriched };
-        checkDebugBanner(enriched);
-
-        if (msg.securityHeaders) {
-          const secDiv = document.getElementById('securityHeaders');
-          if (secDiv) {
-            const h = msg.securityHeaders;
-            const items = [
-              { name: 'Content-Security-Policy', value: h['Content-Security-Policy'] },
-              { name: 'X-Frame-Options', value: h['X-Frame-Options'] },
-              { name: 'Strict-Transport-Security', value: h['Strict-Transport-Security'] },
-              { name: 'X-Content-Type-Options', value: h['X-Content-Type-Options'] },
-              { name: 'Referrer-Policy', value: h['Referrer-Policy'] }
-            ];
-            let html = '<strong>Security Headers:</strong><ul>';
-            items.forEach(i => {
-              html += `<li>${i.value ? '✅' : '❌'} ${i.name}: ${i.value || 'отсутствует'}</li>`;
-            });
-            html += '</ul>';
-            secDiv.innerHTML = html;
-            secDiv.classList.remove('hidden');
-          }
-        }
-
-        const networkErrors = enriched.filter(r => r.status === 'network_error' || r.status === 'error');
-        const httpResults = enriched.filter(r => r.status !== 'network_error' && r.status !== 'error');
-        if (networkErrors.length > 0) {
-          statusDiv.innerHTML = `❌ Ошибки сети для ${networkErrors.length} путей (см. консоль)`;
-        }
-        const interesting = httpResults.filter(r => r.status !== 404);
-        const toSave = {
-          baseUrl: baseUrl,
-          mode: mode,
-          results: enriched,
-          timestamp: Date.now()
-        };
-        browser.storage.local.set({ lastScanResults: toSave });
-        if (interesting.length > 0) {
-          statusDiv.innerHTML += `<br>⚠️ Найдено ${interesting.length} потенциально опасных путей:`;
-          displayResults(interesting);
-          exportContainer.classList.remove('hidden');
-          if (filtersContainer) filtersContainer.classList.remove('hidden');
-          applyFilter();
-        } else if (networkErrors.length === 0) {
-          statusDiv.textContent = '✅ Ничего критичного не найдено.';
-        }
+        document.getElementById('progressText').textContent = text;
+      } else if (msg.type === 'result') {
+        handleScanComplete(msg, baseUrl, mode);
         port.disconnect();
         port = null;
-      } else if (msg.type === "paused") {
       }
     });
-    port.postMessage({ command: "start", url: baseUrl, mode: mode });
+    port.postMessage({ command: 'start', url: baseUrl, mode });
   }).catch(err => {
-    console.error('[popup] ошибка получения вкладки:', err);
-    statusDiv.textContent = 'Ошибка получения адреса страницы';
+    console.error('[popup]', err);
+    document.getElementById('status').textContent = 'Ошибка получения адреса страницы';
   });
 }
 
-// Экспорт CSV
 document.getElementById('exportBtn').addEventListener('click', () => {
   if (!currentScanData) return;
-  const { results, baseUrl } = currentScanData;
-  const rows = [ ['Путь (URL)', 'Статус', 'Размер (байт)'] ];
-  for (const item of results) {
-    if (item.status === 'network_error' || item.status === 'error' || item.status === 404) continue;
-    rows.push([item.fullUrl, item.status, item.size]);
+  const rows = [['URL', 'Статус', 'Severity', 'Размер']];
+  for (const item of getInterestingResults(currentScanData.results)) {
+    rows.push([item.fullUrl, item.status, item.severity, item.size]);
   }
-  const csv = rows.map(r => r.join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `scan_${new URL(baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  downloadBlob(csv, 'text/csv', 'csv');
 });
 
-// Экспорт JSON
 document.getElementById('exportJsonBtn').addEventListener('click', () => {
   if (!currentScanData) return;
   const exportData = {
     scanTime: new Date().toISOString(),
     baseUrl: currentScanData.baseUrl,
     mode: currentScanData.mode,
-    results: currentScanData.results.filter(r => r.status !== 404 && r.status !== 'network_error')
+    analysis: currentScanData.analysis,
+    results: getInterestingResults(currentScanData.results)
   };
-  const json = JSON.stringify(exportData, null, 2);
-  const blob = new Blob([json], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `scan_${new URL(currentScanData.baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(JSON.stringify(exportData, null, 2), 'application/json', 'json');
 });
 
-// Экспорт HTML
 document.getElementById('exportHtmlBtn').addEventListener('click', () => {
   if (!currentScanData) return;
-  const { results, baseUrl, mode } = currentScanData;
-  const interesting = results.filter(r => r.status !== 404 && r.status !== 'network_error' && r.status !== 'error');
-  // Generate HTML
-  const html = `
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <title>Отчёт сканирования Sensitive File Scanner</title>
-  <style>
-    body { font-family: sans-serif; margin: 20px; }
-    h1 { color: #2c3e50; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
-    th { background-color: #f2f2f2; }
-    .status-200 { color: green; font-weight: bold; }
-    .status-301, .status-302 { color: orange; }
-    .status-401, .status-403 { color: darkorange; font-weight: bold; }
-    .status-500 { color: red; font-weight: bold; }
-    .status-error { color: gray; }
-    .meta { margin-bottom: 10px; color: #555; }
-  </style>
-</head>
-<body>
-  <h1>Отчёт сканирования Sensitive File Scanner</h1>
-  <div class="meta">
-    <strong>Дата сканирования:</strong> ${new Date().toLocaleString()}<br>
-    <strong>Базовый URL:</strong> ${baseUrl}<br>
-    <strong>Режим:</strong> ${mode === 'site' ? 'Сайт' : 'Текущий путь'}
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th>Путь</th>
-        <th>Полный URL</th>
-        <th>Статус</th>
-        <th>Размер (байт)</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${interesting.map(item => `
-        <tr>
-          <td>${item.path}</td>
-          <td><a href="${item.fullUrl}" target="_blank">${item.fullUrl}</a></td>
-          <td class="status-${item.status}">${item.status}</td>
-          <td>${item.size}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
-</body>
-</html>
-  `.trim();
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `scan_${new URL(baseUrl).hostname}_${new Date().toISOString().slice(0,10)}.html`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  const { results, baseUrl, mode, analysis } = currentScanData;
+  const interesting = getInterestingResults(results);
+  const vulnHtml = (analysis?.vulnerabilities || []).map(v => {
+    const m = VULN_LABELS[v] || { label: v };
+    return `<li>${m.label}</li>`;
+  }).join('');
+  const techHtml = (analysis?.detectedTech || []).map(t => `<li>${t.name} (${t.confidence})</li>`).join('');
+  const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Scan Report</title>
+<style>body{font-family:sans-serif;margin:20px}table{width:100%;border-collapse:collapse}
+th,td{padding:8px;border-bottom:1px solid #ddd}th{background:#f2f2f2}
+.sev-critical{color:#c0392b;font-weight:bold}.sev-high{color:#e67e22}</style></head><body>
+<h1>Отчёт Sensitive File Scanner</h1>
+<p><strong>URL:</strong> ${baseUrl}<br><strong>Режим:</strong> ${mode}<br><strong>Дата:</strong> ${new Date().toLocaleString()}</p>
+${techHtml ? `<h3>Технологии</h3><ul>${techHtml}</ul>` : ''}
+${vulnHtml ? `<h3>Уязвимости</h3><ul>${vulnHtml}</ul>` : ''}
+<table><thead><tr><th>Severity</th><th>Путь</th><th>URL</th><th>Статус</th><th>Размер</th></tr></thead><tbody>
+${interesting.map(i => `<tr><td class="sev-${i.severity}">${i.severity}</td><td>${i.path}</td><td><a href="${i.fullUrl}">${i.fullUrl}</a></td><td>${i.status}</td><td>${i.size}</td></tr>`).join('')}
+</tbody></table></body></html>`;
+  downloadBlob(html, 'text/html', 'html');
 });
 
-// Пауза
+function downloadBlob(content, mime, ext) {
+  const host = currentScanData?.baseUrl ? new URL(currentScanData.baseUrl).hostname : 'scan';
+  const blob = new Blob([content], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `scan_${host}_${new Date().toISOString().slice(0, 10)}.${ext}`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 document.getElementById('pauseBtn').addEventListener('click', () => {
   if (!port) return;
   paused = !paused;
   document.getElementById('pauseBtn').textContent = paused ? '▶ Продолжить' : '⏸ Пауза';
-  port.postMessage({ command: "pause", value: paused });
+  port.postMessage({ command: 'pause', value: paused });
 });
 
-// Тёмная тема
+document.getElementById('stopBtn').addEventListener('click', () => {
+  if (!port) return;
+  port.postMessage({ command: 'stop' });
+  document.getElementById('stopBtn').disabled = true;
+});
+
+document.getElementById('optionsLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  browser.runtime.openOptionsPage();
+});
+
+document.getElementById('historySelect').addEventListener('change', async (e) => {
+  const id = e.target.value;
+  if (!id) return;
+  const { scanHistory = [] } = await browser.storage.local.get('scanHistory');
+  const entry = scanHistory.find(h => h.id === id);
+  if (!entry) return;
+  const enriched = entry.results.map(r => r.fullUrl ? r : enrichResult(r, entry.baseUrl, entry.mode));
+  showScanResults({
+    baseUrl: entry.baseUrl,
+    mode: entry.mode,
+    results: enriched,
+    analysis: entry.analysis || analyzeAll(enriched),
+    timestamp: entry.timestamp,
+    findingsCount: entry.findingsCount
+  });
+});
+
+document.getElementById('clearHistoryBtn').addEventListener('click', async () => {
+  if (!confirm('Очистить всю историю сканов?')) return;
+  await browser.storage.local.remove('scanHistory');
+  await loadHistorySelect();
+});
+
 const themeToggle = document.getElementById('themeToggle');
 if (themeToggle) {
-  const currentTheme = localStorage.getItem('theme') || 'light';
-  if (currentTheme === 'dark') {
+  if (localStorage.getItem('theme') === 'dark') {
     document.body.classList.add('dark');
     themeToggle.textContent = '☀️';
   }
@@ -415,7 +446,6 @@ if (themeToggle) {
   });
 }
 
-// Назначение кнопок
 document.getElementById('scanSiteBtn').addEventListener('click', () => startScan('site'));
 document.getElementById('scanPathBtn').addEventListener('click', () => startScan('path'));
 
