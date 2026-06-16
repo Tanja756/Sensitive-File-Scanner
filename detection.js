@@ -113,6 +113,108 @@ function detectExpress(results) {
   return null;
 }
 
+function detectSolr(results) {
+  const paths = ['/solr/admin/info/system', '/solr/admin/cores'];
+  if (results.some(r => paths.some(p => r.path === p && scanHit(r)))) return { name: 'Apache Solr', confidence: 'high' };
+  return null;
+}
+function detectDruid(results) {
+  if (results.some(r => r.path === '/druid/index.html' && scanHit(r))) return { name: 'Apache Druid', confidence: 'high' };
+  return null;
+}
+function detectGeoServer(results) {
+  if (results.some(r => r.path === '/geoserver/web/' && scanHit(r))) return { name: 'GeoServer', confidence: 'high' };
+  return null;
+}
+function detectDockerRegistry(results) {
+  if (results.some(r => r.path === '/v2/_catalog' && scanHit(r))) return { name: 'Docker Registry', confidence: 'high' };
+  return null;
+}
+function detectJenkins(results) {
+  const paths = ['/hudson', '/jenkins', '/jenkins/login'];
+  if (results.some(r => paths.some(p => r.path === p && scanHit(r)))) return { name: 'Jenkins/Hudson', confidence: 'high' };
+  return null;
+}
+
+const PMA_BASE_PATHS = ['/phpmyadmin/', '/phpMyAdmin/', '/pma/'];
+
+const PMA_VULN_DB = [
+  { maxVersion: '4.8.2', label: 'pma_vuln_cve_2018_12613', desc: 'File inclusion / RCE' },
+  { maxVersion: '4.9.0', label: 'pma_vuln_cve_2018_19968', desc: 'SQL injection' },
+  { maxVersion: '5.0.4', label: 'pma_vuln_cve_2020_26935', desc: 'XSS' },
+  { maxVersion: '5.1.0', label: 'pma_vuln_cve_2021_21311', desc: 'Directory traversal / RCE' },
+  { maxVersion: '5.1.2', label: 'pma_vuln_cve_2021_39277', desc: 'XSS' },
+  { maxVersion: '5.2.0', label: 'pma_vuln_cve_2022_23804', desc: 'XSS via Twig' },
+  { maxVersion: '5.2.1', label: 'pma_vuln_cve_2023_25776', desc: 'SQL injection' },
+  { maxVersion: '5.2.2', label: 'pma_vuln_cve_2023_24810', desc: 'XSS via drag-and-drop' },
+];
+
+const PMA_KNOWN_OLD = '4.8.0';
+const PMA_LATEST = '5.2.2';
+
+function compareVersions(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
+function detectPhpMyAdmin(results) {
+  const pmaRoot = results.find(r =>
+    PMA_BASE_PATHS.some(p => r.path === p) && scanHit(r)
+  );
+  if (!pmaRoot) return null;
+
+  let version = null;
+
+  for (const r of results) {
+    if (!scanHit(r) || !r.bodySnippet) continue;
+    const snippet = r.bodySnippet;
+    const m = snippet.match(/phpMyAdmin\s+v?(\d+\.\d+\.\d+)/i)
+           || snippet.match(/Version\s+(\d+\.\d+\.\d+)/i);
+    if (m) { version = m[1]; break; }
+  }
+
+  const setupExposed = results.some(r =>
+    scanHit(r) && /\/phpmyadmin\/setup\//i.test(r.path)
+  );
+  const configExposed = results.some(r =>
+    scanHit(r) && /\/phpmyadmin\/config\.inc\.php/i.test(r.path)
+  );
+  const sqlExecutor = results.some(r =>
+    scanHit(r) && /\/phpmyadmin\/sql\.php/i.test(r.path)
+  );
+
+  const vulns = [];
+  if (setupExposed) vulns.push('pma_setup_exposed');
+  if (configExposed) vulns.push('pma_config_exposed');
+  if (sqlExecutor) vulns.push('pma_sql_executor');
+
+  if (version) {
+    vulns.push('pma_version_disclosed');
+    if (compareVersions(version, PMA_KNOWN_OLD) <= 0) {
+      vulns.push('pma_old_version');
+    }
+    for (const v of PMA_VULN_DB) {
+      if (compareVersions(version, v.maxVersion) <= 0) {
+        vulns.push(v.label);
+      }
+    }
+  }
+
+  return {
+    name: 'phpMyAdmin',
+    confidence: 'high',
+    version,
+    vulnerabilities: vulns
+  };
+}
+
 function analyzeAll(results) {
   const tech = [];
   const wordpress = detectWordPress(results);
@@ -143,8 +245,25 @@ function analyzeAll(results) {
   if (rubyonrails) tech.push(rubyonrails);
   const express = detectExpress(results);
   if (express) tech.push(express);
+  const solr = detectSolr(results);
+  if (solr) tech.push(solr);
+  const druid = detectDruid(results);
+  if (druid) tech.push(druid);
+  const geoserver = detectGeoServer(results);
+  if (geoserver) tech.push(geoserver);
+  const dockerReg = detectDockerRegistry(results);
+  if (dockerReg) tech.push(dockerReg);
+  const jenkins = detectJenkins(results);
+  if (jenkins) tech.push(jenkins);
+  const phpMyAdmin = detectPhpMyAdmin(results);
+  if (phpMyAdmin) {
+    tech.push({ name: phpMyAdmin.name, confidence: phpMyAdmin.confidence, version: phpMyAdmin.version });
+  }
 
   const vulns = [];
+  if (phpMyAdmin && phpMyAdmin.vulnerabilities) {
+    phpMyAdmin.vulnerabilities.forEach(v => vulns.push(v));
+  }
   if (results.some(r => r.path.startsWith('/.git/') && scanHit(r))) vulns.push('exposed_git');
   if (results.some(r => r.path === '/.env' && scanHit(r))) vulns.push('env_exposed');
   if (results.some(r => r.debugMode)) vulns.push('debug_mode');
@@ -154,6 +273,41 @@ function analyzeAll(results) {
   if (results.some(r => ['/swagger-ui.html', '/api-docs', '/api.json'].includes(r.path) && scanHit(r))) vulns.push('swagger_exposed');
   if (results.some(r => r.path.startsWith('/actuator/') && scanHit(r))) vulns.push('actuator_exposed');
   if (results.some(r => r.path === '/console' && scanHit(r))) vulns.push('h2_console_exposed');
+  // Infrastructure vulnerability checks
+  if (results.some(r => r.path.includes('eval-stdin.php') && scanHit(r))) vulns.push('phpunit_rce');
+  if (results.some(r => r.path.includes('/solr/admin/') && scanHit(r))) vulns.push('solr_exposed');
+  if (results.some(r => r.path.includes('/v2/_catalog') && scanHit(r))) vulns.push('docker_registry_api');
+  if (results.some(r => r.path.includes('/druid/index.html') && scanHit(r))) vulns.push('druid_exposed');
+  if (results.some(r => r.path.includes('/geoserver/web/') && scanHit(r))) vulns.push('geoserver_exposed');
+  if (results.some(r => ['/hudson', '/jenkins', '/jenkins/login'].includes(r.path) && scanHit(r))) vulns.push('jenkins_exposed');
+  if (results.some(r => r.path === '/query' && scanHit(r))) vulns.push('db_diagnostics');
+  if (phpMyAdmin) vulns.push('phpmyadmin_exposed');
+  if (results.some(r => '/pgadmin/' === r.path && scanHit(r))) vulns.push('pgadmin_exposed');
+  if (results.some(r => '/adminer.php' === r.path && scanHit(r))) vulns.push('adminer_exposed');
+  // Router/IoT vulnerability checks
+  if (results.some(r => r.path === '/HNAP1' && scanHit(r))) vulns.push('router_hnap');
+  if (results.some(r => ['/evox/about'].includes(r.path) && scanHit(r))) vulns.push('router_evox');
+  if (results.some(r => r.path.includes('/cgi-bin/authLogin.cgi') && scanHit(r))) vulns.push('cgi_exposed');
+  // Secrets & credentials
+  if (results.some(r => ['/secrets.json', '/credentials.json', '/cdp_api_key.json', '/secrets.yml', '/secrets.yaml'].includes(r.path) && scanHit(r))) vulns.push('secrets_exposed');
+  // Subdirectory .env exposure
+  const envSubdirs = ['/app/.env', '/src/.env', '/config/.env', '/backend/.env', '/api/.env', '/laravel/.env', '/magento/.env'];
+  if (results.some(r => envSubdirs.includes(r.path) && scanHit(r))) vulns.push('env_in_subdir');
+  // Source code exposure (non-minified JS bundles)
+  const sourceFiles = ['/app.js', '/main.js', '/bundle.js', '/server.js', '/index.js', '/config.js'];
+  if (results.some(r => sourceFiles.includes(r.path) && scanHit(r) && r.size > 10000)) vulns.push('source_code_exposed');
+  // Open proxy / CONNECT tunnel
+  if (results.some(r => r.proxyCheck === true || r.path.includes('CONNECT'))) vulns.push('open_proxy');
+
+  // WordPress-specific vulnerabilities
+  if (results.some(r => r.path === '/xmlrpc.php' && scanHit(r))) vulns.push('wp_xmlrpc_enabled');
+  if (results.some(r => r.path === '/wp-config.php' && scanHit(r))) vulns.push('wp_config_exposed');
+  if (results.some(r => r.path === '/wp-content/debug.log' && scanHit(r) && r.size > 0)) vulns.push('wp_debug_log');
+  if (results.some(r => r.path === '/wp-admin/install.php' && scanHit(r))) vulns.push('wp_install_accessible');
+  if (results.some(r => r.path === '/wp-json/wp/v2/users' && scanHit(r))) vulns.push('wp_rest_users');
+  if (results.some(r => r.path === '/readme.html' && scanHit(r))) vulns.push('wp_readme_exposed');
+  if (results.some(r => r.path === '/license.txt' && scanHit(r))) vulns.push('wp_license_exposed');
+  if (results.some(r => r.path === '/wp-json/' && scanHit(r))) vulns.push('wp_rest_api_exposed');
 
   return { detectedTech: tech, vulnerabilities: vulns };
 }

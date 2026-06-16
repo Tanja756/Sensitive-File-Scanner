@@ -1,6 +1,12 @@
 let pathEntries = [];
+let wpPathEntries = [];
+let pmaPathEntries = [];
 let pathsLoaded = false;
+let wpPathsLoaded = false;
+let pmaPathsLoaded = false;
 let loadingPromise = null;
+let wpLoadingPromise = null;
+let pmaLoadingPromise = null;
 
 async function loadWordlist(force = false) {
   if (pathsLoaded && !force) return;
@@ -40,7 +46,68 @@ async function loadWordlist(force = false) {
   })();
   return loadingPromise;
 }
+async function loadWpWordlist(force = false) {
+  if (wpPathsLoaded && !force) return;
+  if (wpLoadingPromise && !force) return wpLoadingPromise;
+  wpLoadingPromise = (async () => {
+    try {
+      const url = browser.runtime.getURL('wordlist-wp.txt');
+      const response = await fetch(url);
+      if (response.ok) {
+        wpPathEntries = parseWordlistText(await response.text());
+      }
+    } catch (e) {
+      console.error('wp wordlist fetch error', e);
+    }
+    if (wpPathEntries.length === 0) {
+      // Fallback: essential WordPress paths
+      wpPathEntries = [
+        { path: '/wp-config.php', category: 'cms' },
+        { path: '/xmlrpc.php', category: 'cms' },
+        { path: '/wp-login.php', category: 'cms' },
+        { path: '/wp-content/', category: 'cms' },
+        { path: '/wp-includes/', category: 'cms' },
+        { path: '/wp-admin/', category: 'cms' },
+        { path: '/wp-json/', category: 'cms' },
+        { path: '/readme.html', category: 'cms' },
+        { path: '/license.txt', category: 'cms' }
+      ];
+    }
+  })();
+  return wpLoadingPromise;
+}
+
+async function loadPmaWordlist(force = false) {
+  if (pmaPathsLoaded && !force) return;
+  if (pmaLoadingPromise && !force) return pmaLoadingPromise;
+  pmaLoadingPromise = (async () => {
+    try {
+      const url = browser.runtime.getURL('wordlist-pma.txt');
+      const response = await fetch(url);
+      if (response.ok) {
+        pmaPathEntries = parseWordlistText(await response.text());
+      }
+    } catch (e) {
+      console.error('pma wordlist fetch error', e);
+    }
+    if (pmaPathEntries.length === 0) {
+      pmaPathEntries = [
+        { path: '/phpmyadmin/', category: 'cms' },
+        { path: '/phpMyAdmin/', category: 'cms' },
+        { path: '/pma/', category: 'cms' },
+        { path: '/phpmyadmin/README', category: 'cms' },
+        { path: '/phpmyadmin/config.inc.php', category: 'cms' },
+        { path: '/phpmyadmin/setup/', category: 'cms' },
+        { path: '/phpmyadmin/sql.php', category: 'cms' }
+      ];
+    }
+  })();
+  return pmaLoadingPromise;
+}
+
 loadWordlist();
+loadWpWordlist();
+loadPmaWordlist();
 
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && (changes.customWordlist || changes.useCustomOnly)) {
@@ -195,6 +262,10 @@ async function checkPath(fullUrl, displayPath, timeout, options, baseline) {
     severity
   };
 
+  if (status === 200 && needsBodyCapture(displayPath)) {
+    result.bodySnippet = text.substring(0, 1000);
+  }
+
   if (isSoft404(result, baseline)) {
     result.interesting = false;
     result.soft404 = true;
@@ -216,8 +287,13 @@ async function checkPath(fullUrl, displayPath, timeout, options, baseline) {
   return result;
 }
 
-async function runScanLoop(baseUrl, mode, options, state) {
-  const paths = getFilteredPaths(options);
+async function runScanLoop(baseUrl, mode, options, state, customPaths) {
+  let paths;
+  if (customPaths) {
+    paths = customPaths;
+  } else {
+    paths = getFilteredPaths(options);
+  }
   const total = paths.length;
   const results = [];
   if (total === 0) return { results, analysis: analyzeAll([]), total: 0 };
@@ -271,9 +347,32 @@ async function runScanLoop(baseUrl, mode, options, state) {
 }
 
 async function performScan(baseUrl, mode, state = {}) {
-  await loadWordlist();
   const options = await getOptions();
-  return runScanLoop(baseUrl, mode, options, state);
+  if (mode === 'wp') {
+    await loadWpWordlist();
+    return runScanLoop(baseUrl, mode, options, state, wpPathEntries);
+  }
+  if (mode === 'pma') {
+    await loadPmaWordlist();
+    return runScanLoop(baseUrl, mode, options, state, pmaPathEntries);
+  }
+  await loadWordlist();
+  return runScanLoop(baseUrl, mode, options, state, pathEntries);
+}
+
+async function checkOpenProxy(baseUrl, timeout) {
+  try {
+    const proxyUrl = baseUrl.replace(/\/+$/, '') + '/http://httpbin.org/get';
+    const res = await xhrRequest('GET', proxyUrl, timeout);
+    if (res.status === 'network_error') return null;
+    const text = (res.text || '').toLowerCase();
+    if (res.status === 200 && (text.includes('"url"') || text.includes('httpbin') || text.includes('"origin"'))) {
+      return { isOpenProxy: true };
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
 }
 
 async function fetchSecurityHeadersReal(baseUrl) {
@@ -345,18 +444,28 @@ browser.runtime.onConnect.addListener((port) => {
       const baseUrl = msg.url;
       const mode = msg.mode || 'site';
 
-      await loadWordlist();
       const options = await getOptions();
-      const filtered = getFilteredPaths(options);
+      let scanPaths;
 
-      if (filtered.length === 0) {
+      if (mode === 'wp') {
+        await loadWpWordlist();
+        scanPaths = wpPathEntries;
+      } else if (mode === 'pma') {
+        await loadPmaWordlist();
+        scanPaths = pmaPathEntries;
+      } else {
+        await loadWordlist();
+        scanPaths = getFilteredPaths(options);
+      }
+
+      if (scanPaths.length === 0) {
         port.postMessage({ type: 'result', results: [], analysis: analyzeAll([]), total: 0 });
         return;
       }
 
       state.onProgress = (progress) => port.postMessage({ type: 'progress', ...progress });
 
-      const { results, analysis, total, stopped } = await runScanLoop(baseUrl, mode, options, state);
+      const { results, analysis, total, stopped } = await runScanLoop(baseUrl, mode, options, state, scanPaths);
 
       if (!msg.skipSave) {
         await saveScanToStorage(baseUrl, mode, results, analysis);
@@ -369,13 +478,30 @@ browser.runtime.onConnect.addListener((port) => {
       }
 
       const securityHeaders = await fetchSecurityHeadersReal(baseUrl);
+      const proxyResult = await checkOpenProxy(baseUrl, options.timeout);
+      if (proxyResult && proxyResult.isOpenProxy) {
+        if (!analysis.vulnerabilities) analysis.vulnerabilities = [];
+        if (!analysis.vulnerabilities.includes('open_proxy')) {
+          analysis.vulnerabilities.push('open_proxy');
+        }
+        results.push({
+          path: '/CONNECT (proxy tunnel)',
+          status: 200,
+          size: 0,
+          interesting: true,
+          severity: 'critical',
+          category: 'cloud',
+          proxyCheck: true
+        });
+      }
       port.postMessage({
         type: 'result',
         results,
         analysis,
         total,
         stopped,
-        securityHeaders
+        securityHeaders,
+        proxyResult
       });
     }
   });

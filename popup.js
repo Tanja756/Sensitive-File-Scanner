@@ -448,6 +448,8 @@ if (themeToggle) {
 
 document.getElementById('scanSiteBtn').addEventListener('click', () => startScan('site'));
 document.getElementById('scanPathBtn').addEventListener('click', () => startScan('path'));
+document.getElementById('scanWPBtn').addEventListener('click', () => startScan('wp'));
+document.getElementById('scanPmaBtn').addEventListener('click', () => startScan('pma'));
 
 initFilters();
 restoreLastResults();

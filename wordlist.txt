@@ -129,6 +129,37 @@
 /.env.backup
 /.env.old
 /.env.save
+/.env.prod
+/.env.dev
+/.env.test
+/.env.bak
+/.env.swp
+/.env.tmp
+/.env~
+/.env.sample
+/.env.dist
+/.env.template
+/.env.production.local
+/.env.development.local
+/.env.test.local
+/.envrc
+/.flaskenv
+/.env.ini
+/.env.1
+/env
+/env.js
+/env.json
+/.env.php
+/.env.sample.php
+/.env.local.php
+/.env.production.php
+/.env.php.bak
+/.env.php-bak
+/.env.php-backup
+/.env.php.backup
+/.env.example.php
+/config.dev.php
+/config.env
 /.htpasswd
 /.htaccess
 /settings.pyc
@@ -222,6 +253,74 @@
 /.classpath
 /nbproject/project.properties
 
+  // ========== ENV-файлы в подкаталогах ==========
+/app/.env
+/src/.env
+/config/.env
+/backend/.env
+/frontend/.env
+/api/.env
+/server/.env
+/client/.env
+/web/.env
+/public/.env
+/private/.env
+/var/.env
+/laravel/.env
+/magento/.env
+/node/.env
+/ftp/.env
+/rails/.env
+/kibana/.env
+
+  // ========== JS Source Bundles ==========
+/app.js
+/main.js
+/index.js
+/server.js
+/bundle.js
+/app.bundle.js
+/main.bundle.js
+/vendor.js
+/chunk.js
+/static/js/main.js
+/static/js/app.js
+/static/js/bundle.js
+/dist/main.js
+/dist/app.js
+/dist/bundle.js
+/build/static/js/main.js
+/assets/index.js
+/assets/app.js
+/sourcemap
+/*.map
+
+  // ========== Java / J2EE Infrastructure ==========
+/druid/index.html
+/solr/
+/solr/admin/info/system
+/solr/admin/cores
+/geoserver/web/
+/hudson
+/jenkins
+/jenkins/login
+/actuator/
+/actuator/health
+/actuator/env
+/actuator/info
+/actuator/heapdump
+
+  // ========== Docker Registry ==========
+/v2/
+/v2/_catalog
+/v2/_ping
+
+  // ========== Router and IoT ==========
+/HNAP1
+/evox/about
+/cgi-bin/authLogin.cgi
+/cgi-bin/
+
   // ========== Пакетные менеджеры (lock-файлы) ==========
 /composer.json
 /composer.lock
@@ -314,6 +413,15 @@
 /secret.key
 /id_rsa.pub
 /id_dsa.pub
+/secrets.json
+/secrets.yml
+/secrets.yaml
+/cdp_api_key.json
+/service_account.json
+/service-account.json
+/oauth.json
+/oauth2.json
+/token.json
 
   // ========== Конфигурационные файлы фреймворков ==========
 /config/app.php                 # Laravel
@@ -334,6 +442,68 @@
 /appsettings.json
 /appsettings.Development.json
 /appsettings.Production.json
+
+  // ========== PHPUnit RCE (CVE-2017-9841) ==========
+/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php
+/vendor/phpunit/src/Util/PHP/eval-stdin.php
+/phpunit/src/Util/PHP/eval-stdin.php
+
+  // ========== Database Diagnostics ==========
+/query
+/query?q=SHOW+DIAGNOSTICS
+/pgadmin/
+/adminer.php
+
+  // ========== phpMyAdmin: основные пути ==========
+/phpmyadmin/
+/phpMyAdmin/
+/pma/
+/phpmyadmin/README
+/phpMyAdmin/README
+/pma/README
+/phpmyadmin/ChangeLog
+/phpMyAdmin/ChangeLog
+/pma/ChangeLog
+/phpmyadmin/changelog.php
+/phpMyAdmin/changelog.php
+/pma/changelog.php
+/phpmyadmin/Documentation.html
+/phpMyAdmin/Documentation.html
+/pma/Documentation.html
+/phpmyadmin/robots.txt
+/phpMyAdmin/robots.txt
+/pma/robots.txt
+/phpmyadmin/js/version.js
+/phpMyAdmin/js/version.js
+/pma/js/version.js
+/phpmyadmin/setup/
+/phpMyAdmin/setup/
+/pma/setup/
+/phpmyadmin/config.inc.php
+/phpMyAdmin/config.inc.php
+/pma/config.inc.php
+/phpmyadmin/sql.php
+/phpMyAdmin/sql.php
+/pma/sql.php
+/phpmyadmin/import.php
+/phpMyAdmin/import.php
+/pma/import.php
+/phpmyadmin/export.php
+/phpMyAdmin/export.php
+/pma/export.php
+/phpmyadmin/phpinfo.php
+/phpMyAdmin/phpinfo.php
+/pma/phpinfo.php
+/phpmyadmin/themes/
+/phpMyAdmin/themes/
+/pma/themes/
+/phpmyadmin/url.php
+/phpMyAdmin/url.php
+/pma/url.php
+/phpmyadmin/license.txt
+/phpMyAdmin/license.txt
+/pma/license.txt
+/phppgadmin/
 
   // ========== API-документация и отладка ==========
 /swagger-ui.html
