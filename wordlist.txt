@@ -238,6 +238,9 @@
 /application.log
 /stderr.log
 /stdout.log
+/django.log
+/django_debug.log
+/django-error.log
 
   // ========== IDE и редакторы ==========
 /.vscode/sftp.json
@@ -518,6 +521,15 @@
 /env
 /api/env
 /api/debug
+/__debug__/
+/__debug__/settings/
+/__debug__/sql/
+/__debug__/request/
+/settings/
+/debug/
+/debug/settings/
+/debug/env/
+/manage.py
 
   // ========== Разное ==========
 /.gitlab/

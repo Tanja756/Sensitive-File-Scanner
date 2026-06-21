@@ -1,12 +1,15 @@
 let pathEntries = [];
 let wpPathEntries = [];
 let pmaPathEntries = [];
+let djangoPathEntries = [];
 let pathsLoaded = false;
 let wpPathsLoaded = false;
 let pmaPathsLoaded = false;
+let djangoPathsLoaded = false;
 let loadingPromise = null;
 let wpLoadingPromise = null;
 let pmaLoadingPromise = null;
+let djangoLoadingPromise = null;
 
 async function loadWordlist(force = false) {
   if (pathsLoaded && !force) return;
@@ -105,9 +108,49 @@ async function loadPmaWordlist(force = false) {
   return pmaLoadingPromise;
 }
 
+async function loadDjangoWordlist(force = false) {
+  if (djangoPathsLoaded && !force) return;
+  if (djangoLoadingPromise && !force) return djangoLoadingPromise;
+  djangoLoadingPromise = (async () => {
+    try {
+      djangoPathEntries = [
+        { path: '/.env', category: 'cloud' },
+        { path: '/.env.local', category: 'cloud' },
+        { path: '/.env.production', category: 'cloud' },
+        { path: '/.env.development', category: 'cloud' },
+        { path: '/.env.staging', category: 'cloud' },
+        { path: '/.env.backup', category: 'cloud' },
+        { path: '/.env.old', category: 'cloud' },
+        { path: '/debug.log', category: 'logs' },
+        { path: '/error.log', category: 'logs' },
+        { path: '/django.log', category: 'logs' },
+        { path: '/django_debug.log', category: 'logs' },
+        { path: '/django-error.log', category: 'logs' },
+        { path: '/access.log', category: 'logs' },
+        { path: '/app.log', category: 'logs' },
+        { path: '/__debug__/', category: 'cms' },
+        { path: '/settings/', category: 'cms' },
+        { path: '/debug/', category: 'cms' },
+        { path: '/env/', category: 'cms' },
+        { path: '/admin/', category: 'cms' },
+        { path: '/manage.py', category: 'cms' },
+        { path: '/robots.txt', category: 'cms' },
+        { path: '/admin/login/', category: 'cms' },
+        { path: '/api/', category: 'cms' },
+        { path: '/static/', category: 'cms' },
+      ];
+    } finally {
+      djangoPathsLoaded = true;
+      djangoLoadingPromise = null;
+    }
+  })();
+  return djangoLoadingPromise;
+}
+
 loadWordlist();
 loadWpWordlist();
 loadPmaWordlist();
+loadDjangoWordlist();
 
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && (changes.customWordlist || changes.useCustomOnly)) {
@@ -186,7 +229,7 @@ async function fetch404Baseline(baseUrl, mode, timeout) {
   const probePath = `/${nonce}.html`;
   const url = buildUrl(probePath, baseUrl, mode);
   const res = await xhrRequest('GET', url, timeout);
-  if (res.status === 'network_error') return null;
+  if (res.status === 'network_error') return { error: true, reason: res.error || 'network_error' };
   return {
     status: res.status,
     fingerprint: simpleFingerprint(res.text),
@@ -248,6 +291,10 @@ async function checkPath(fullUrl, displayPath, timeout, options, baseline) {
 
   const fingerprint = simpleFingerprint(text);
   const debugMode = checkForDjangoDebug(text);
+  let debugData = null;
+  if (debugMode) {
+    debugData = extractDjangoDebugData(text);
+  }
   const signatureOk = matchesSignature(displayPath, text);
   const severity = getPathSeverity(displayPath);
 
@@ -257,6 +304,7 @@ async function checkPath(fullUrl, displayPath, timeout, options, baseline) {
     size: text.length,
     redirected,
     debugMode,
+    debugData: debugData && debugData.length > 0 ? debugData : null,
     fingerprint,
     signatureOk,
     severity
@@ -298,7 +346,32 @@ async function runScanLoop(baseUrl, mode, options, state, customPaths) {
   const results = [];
   if (total === 0) return { results, analysis: analyzeAll([]), total: 0 };
 
-  const baseline = await fetch404Baseline(baseUrl, mode, options.timeout);
+  let baseline = await fetch404Baseline(baseUrl, mode, options.timeout);
+  let resolvedUrl = baseUrl;
+  let protocolNote = null;
+
+  if (baseline && baseline.error) {
+    const reason = baseline.reason;
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol === 'http:') {
+      protocolNote = '❌ Сайт не отвечает по HTTP. Firefox может блокировать запросы:\n'
+        + `• Причина: ${reason === 'timeout' ? 'таймаут' : 'ошибка сети'}\n`
+        + '• Откройте about:preferences#privacy → HTTPS-Only Mode\n'
+        + '• Добавьте сайт в исключения или отключите режим';
+    } else {
+      const httpUrl = `http://${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+      const httpBaseline = await fetch404Baseline(httpUrl, mode, options.timeout);
+      if (httpBaseline && !httpBaseline.error) {
+        baseline = httpBaseline;
+        resolvedUrl = httpUrl;
+        protocolNote = '⚠️ HTTPS не отвечает — переключено на HTTP';
+      } else {
+        protocolNote = '❌ Сайт не отвечает ни по HTTP, ни по HTTPS.\n'
+          + 'Проверьте доступность сайта в браузере.';
+      }
+    }
+  }
+
   let completed = 0;
   const startTime = Date.now();
   const { batchSize, rateLimit, timeout } = options;
@@ -311,7 +384,7 @@ async function runScanLoop(baseUrl, mode, options, state, customPaths) {
     const batch = paths.slice(i, i + batchSize);
     const batchResults = await Promise.allSettled(
       batch.map(({ path }) => {
-        const url = buildUrl(path, baseUrl, mode);
+        const url = buildUrl(path, resolvedUrl, mode);
         return checkPath(url, path, timeout, options, baseline);
       })
     );
@@ -343,7 +416,7 @@ async function runScanLoop(baseUrl, mode, options, state, customPaths) {
   }
 
   const analysis = analyzeAll(results);
-  return { results, analysis, total, stopped: state.stopped };
+  return { results, analysis, total, stopped: state.stopped, protocolNote };
 }
 
 async function performScan(baseUrl, mode, state = {}) {
@@ -355,6 +428,10 @@ async function performScan(baseUrl, mode, state = {}) {
   if (mode === 'pma') {
     await loadPmaWordlist();
     return runScanLoop(baseUrl, mode, options, state, pmaPathEntries);
+  }
+  if (mode === 'django') {
+    await loadDjangoWordlist();
+    return runScanLoop(baseUrl, mode, options, state, djangoPathEntries);
   }
   await loadWordlist();
   return runScanLoop(baseUrl, mode, options, state, pathEntries);
@@ -453,6 +530,9 @@ browser.runtime.onConnect.addListener((port) => {
       } else if (mode === 'pma') {
         await loadPmaWordlist();
         scanPaths = pmaPathEntries;
+      } else if (mode === 'django') {
+        await loadDjangoWordlist();
+        scanPaths = djangoPathEntries;
       } else {
         await loadWordlist();
         scanPaths = getFilteredPaths(options);
@@ -465,7 +545,7 @@ browser.runtime.onConnect.addListener((port) => {
 
       state.onProgress = (progress) => port.postMessage({ type: 'progress', ...progress });
 
-      const { results, analysis, total, stopped } = await runScanLoop(baseUrl, mode, options, state, scanPaths);
+      const { results, analysis, total, stopped, protocolNote } = await runScanLoop(baseUrl, mode, options, state, scanPaths);
 
       if (!msg.skipSave) {
         await saveScanToStorage(baseUrl, mode, results, analysis);
@@ -501,7 +581,8 @@ browser.runtime.onConnect.addListener((port) => {
         total,
         stopped,
         securityHeaders,
-        proxyResult
+        proxyResult,
+        protocolNote
       });
     }
   });

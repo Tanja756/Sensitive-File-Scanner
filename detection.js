@@ -15,10 +15,11 @@ function detectWordPress(results) {
 }
 
 function detectDjangoDebug(results) {
-  const debugPaths = ['/.env', '/debug.log', '/error.log'];
+  const debugPaths = ['/.env', '/debug.log', '/error.log', '/django.log', '/django_debug.log'];
   const hasDebugPath = results.some(r => debugPaths.includes(r.path) && scanHit(r));
   const hasDebugContent = results.some(r => r.debugMode === true);
-  if (hasDebugPath || hasDebugContent) return { name: 'Django', confidence: 'high', debug: true };
+  const hasDebugData = results.some(r => r.debugData && r.debugData.length > 0);
+  if (hasDebugPath || hasDebugContent || hasDebugData) return { name: 'Django', confidence: 'high', debug: true, dataExposed: hasDebugData };
   return null;
 }
 
@@ -298,6 +299,9 @@ function analyzeAll(results) {
   if (results.some(r => sourceFiles.includes(r.path) && scanHit(r) && r.size > 10000)) vulns.push('source_code_exposed');
   // Open proxy / CONNECT tunnel
   if (results.some(r => r.proxyCheck === true || r.path.includes('CONNECT'))) vulns.push('open_proxy');
+
+  // Django debug data exposure
+  if (results.some(r => r.debugData && r.debugData.length > 0)) vulns.push('django_debug_data_exposed');
 
   // WordPress-specific vulnerabilities
   if (results.some(r => r.path === '/xmlrpc.php' && scanHit(r))) vulns.push('wp_xmlrpc_enabled');

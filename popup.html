@@ -69,6 +69,8 @@
       color: #b00;
     }
     body.dark #debugBanner { background: #4a2020; color: #faa; }
+    body.dark #debugDataContainer { background: #3a1515; border-color: #c0392b; }
+    body.dark #debugDataPre { background: #4a2020; color: #faa; }
     #detectionPanel {
       margin: 8px 0;
       padding: 8px;
@@ -101,11 +103,16 @@
     </div>
   </div>
   <div id="debugBanner" class="hidden">⚠️ Обнаружен режим DEBUG = True! Сервер может раскрывать конфиденциальные данные.</div>
+  <div id="debugDataContainer" class="hidden" style="margin:8px 0;padding:8px;border:2px solid #c0392b;border-radius:4px;background:#fff0f0;font-size:12px;">
+    <strong style="color:#c0392b;">🔑 Извлечённые данные из debug-лога:</strong>
+    <pre id="debugDataPre" style="white-space:pre-wrap;word-break:break-all;margin:4px 0;padding:4px;background:#ffe0e0;border-radius:3px;font-family:monospace;font-size:11px;"></pre>
+  </div>
   <div class="toolbar">
     <button id="scanSiteBtn">Проверить сайт</button>
     <button id="scanPathBtn">Проверить текущий путь</button>
     <button id="scanWPBtn" style="background:#21759b;color:white;border-color:#21759b;">WordPress Scan</button>
     <button id="scanPmaBtn" style="background:#f7930c;color:white;border-color:#f7930c;">phpMyAdmin Scan</button>
+    <button id="scanDjangoBtn" style="background:#092e20;color:white;border-color:#092e20;">Django Scan</button>
     <button id="pauseBtn" class="hidden">⏸ Пауза</button>
     <button id="stopBtn" class="hidden">⏹ Стоп</button>
   </div>

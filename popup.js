@@ -34,11 +34,28 @@ function getInterestingResults(results) {
 
 function checkDebugBanner(results) {
   const debugBanner = document.getElementById('debugBanner');
+  const debugContainer = document.getElementById('debugDataContainer');
+  const debugPre = document.getElementById('debugDataPre');
   if (!debugBanner) return;
-  if (results.some(r => r.debugMode === true)) {
+  const hasDebugMode = results.some(r => r.debugMode === true);
+  const debugItems = results.flatMap(r => r.debugData || []);
+  if (hasDebugMode) {
     debugBanner.classList.remove('hidden');
+    if (debugItems.length > 0 && debugContainer && debugPre) {
+      const seen = new Set();
+      const lines = [];
+      for (const { key, value } of debugItems) {
+        if (!seen.has(key)) {
+          seen.add(key);
+          lines.push(`${key}: ${value}`);
+        }
+      }
+      debugPre.textContent = lines.join('\n');
+      debugContainer.classList.remove('hidden');
+    }
   } else {
     debugBanner.classList.add('hidden');
+    if (debugContainer) debugContainer.classList.add('hidden');
   }
 }
 
@@ -171,7 +188,11 @@ function showScanResults(data, statusMessage) {
   if (statusMessage) {
     statusDiv.innerHTML = statusMessage;
   } else if (networkErrors.length > 0) {
-    statusDiv.innerHTML = `❌ Ошибки сети: ${networkErrors.length}`;
+    let msg = `❌ Ошибки сети: ${networkErrors.length}`;
+    if (networkErrors.length === data.results.length && data.results.length > 5) {
+      msg += '<br><small>Все запросы завершились ошибкой. Firefox может блокировать HTTP-запросы. Откройте about:preferences#privacy → HTTPS-Only Mode и добавьте сайт в исключения.</small>';
+    }
+    statusDiv.innerHTML = msg;
   } else {
     statusDiv.innerHTML = '';
   }
@@ -232,9 +253,10 @@ function handleScanComplete(msg, baseUrl, mode) {
 
   let statusMsg = '';
   if (msg.stopped) statusMsg = '⏹ Сканирование остановлено. ';
+  if (msg.protocolNote) statusMsg += msg.protocolNote.replace(/\n/g, '<br>') + ' ';
   if (msg.securityHeaders) renderSecurityHeaders(msg.securityHeaders);
 
-  showScanResults({ baseUrl, mode, results: enriched, analysis, timestamp: Date.now(), findingsCount }, statusMsg);
+  showScanResults({ baseUrl, mode, results: enriched, analysis, timestamp: Date.now(), findingsCount, protocolNote: msg.protocolNote }, statusMsg);
   loadHistorySelect();
 }
 
@@ -367,14 +389,21 @@ document.getElementById('exportHtmlBtn').addEventListener('click', () => {
     return `<li>${m.label}</li>`;
   }).join('');
   const techHtml = (analysis?.detectedTech || []).map(t => `<li>${t.name} (${t.confidence})</li>`).join('');
+  const debugData = interesting.filter(r => r.debugData && r.debugData.length > 0);
+  const debugHtml = debugData.map(r => {
+    const items = r.debugData.map(d => `<li><strong>${d.key}</strong>: <code>${d.value}</code></li>`).join('');
+    return `<h4>${r.path}</h4><ul>${items}</ul>`;
+  }).join('');
   const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Scan Report</title>
 <style>body{font-family:sans-serif;margin:20px}table{width:100%;border-collapse:collapse}
 th,td{padding:8px;border-bottom:1px solid #ddd}th{background:#f2f2f2}
-.sev-critical{color:#c0392b;font-weight:bold}.sev-high{color:#e67e22}</style></head><body>
+.sev-critical{color:#c0392b;font-weight:bold}.sev-high{color:#e67e22}.debug-box{border:2px solid #c0392b;background:#fff0f0;padding:12px;margin:16px 0;border-radius:4px}
+.debug-box h4{margin:0 0 8px 0}.debug-box code{background:#ffe0e0;padding:2px 6px;border-radius:3px;word-break:break-all}</style></head><body>
 <h1>Отчёт Sensitive File Scanner</h1>
 <p><strong>URL:</strong> ${baseUrl}<br><strong>Режим:</strong> ${mode}<br><strong>Дата:</strong> ${new Date().toLocaleString()}</p>
 ${techHtml ? `<h3>Технологии</h3><ul>${techHtml}</ul>` : ''}
 ${vulnHtml ? `<h3>Уязвимости</h3><ul>${vulnHtml}</ul>` : ''}
+${debugHtml ? `<div class="debug-box"><h3 style="color:#c0392b;">🔑 Извлечённые данные из debug-лога</h3>${debugHtml}</div>` : ''}
 <table><thead><tr><th>Severity</th><th>Путь</th><th>URL</th><th>Статус</th><th>Размер</th></tr></thead><tbody>
 ${interesting.map(i => `<tr><td class="sev-${i.severity}">${i.severity}</td><td>${i.path}</td><td><a href="${i.fullUrl}">${i.fullUrl}</a></td><td>${i.status}</td><td>${i.size}</td></tr>`).join('')}
 </tbody></table></body></html>`;
@@ -450,6 +479,7 @@ document.getElementById('scanSiteBtn').addEventListener('click', () => startScan
 document.getElementById('scanPathBtn').addEventListener('click', () => startScan('path'));
 document.getElementById('scanWPBtn').addEventListener('click', () => startScan('wp'));
 document.getElementById('scanPmaBtn').addEventListener('click', () => startScan('pma'));
+document.getElementById('scanDjangoBtn').addEventListener('click', () => startScan('django'));
 
 initFilters();
 restoreLastResults();

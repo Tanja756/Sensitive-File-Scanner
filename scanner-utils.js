@@ -78,7 +78,8 @@ const VULN_LABELS = {
   pma_vuln_cve_2021_39277: { label: 'CVE-2021-39277: phpMyAdmin < 5.1.2 XSS', severity: 'high' },
   pma_vuln_cve_2022_23804: { label: 'CVE-2022-23804: phpMyAdmin < 5.2.0 XSS via Twig', severity: 'high' },
   pma_vuln_cve_2023_25776: { label: 'CVE-2023-25776: phpMyAdmin < 5.2.1 SQL Injection', severity: 'critical' },
-  pma_vuln_cve_2023_24810: { label: 'CVE-2023-24810: phpMyAdmin < 5.2.2 XSS via drag-and-drop', severity: 'high' }
+  pma_vuln_cve_2023_24810: { label: 'CVE-2023-24810: phpMyAdmin < 5.2.2 XSS via drag-and-drop', severity: 'high' },
+  django_debug_data_exposed: { label: 'Режим отладки Django — раскрыты ключи/пароли', severity: 'critical' }
 };
 
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -194,7 +195,8 @@ const PATH_SIGNATURES = [
   { test: p => p.endsWith('.js') && !p.includes('.min.'), patterns: [/require\(|import |export |module\.exports|from\s+['"]/i] },
   { test: p => /\/phpmyadmin\/?$/i.test(p) || /\/phpmyadmin\/index\.php/i.test(p), patterns: [/phpMyAdmin/i, /MySQL/i] },
   { test: p => /\/phpmyadmin\/README/i.test(p), patterns: [/phpMyAdmin/i, /Version\s+\d+\.\d+\.\d+/i] },
-  { test: p => /\/phpmyadmin\/config\.inc\.php/i.test(p), patterns: [/\$cfg\[/i, /\$dbserver/i, /allowdeny/i] }
+  { test: p => /\/phpmyadmin\/config\.inc\.php/i.test(p), patterns: [/\$cfg\[/i, /\$dbserver/i, /allowdeny/i] },
+  { test: p => p.includes('.log') || p.includes('django'), patterns: [/DEBUG\s*=\s*True|Traceback|SECRET_KEY|DJANGO_SETTINGS_MODULE/i] }
 ];
 
 // Paths that may contain version info — body snippet captured for analysis
@@ -205,6 +207,8 @@ const BODY_CAPTURE_PATHS = [
   '/phpmyadmin/Documentation.html', '/phpMyAdmin/Documentation.html', '/pma/Documentation.html',
   '/phpmyadmin/robots.txt', '/phpMyAdmin/robots.txt', '/pma/robots.txt',
   '/phpmyadmin/js/version.js', '/phpMyAdmin/js/version.js', '/pma/js/version.js',
+  '/debug.log', '/error.log', '/django.log', '/django_debug.log',
+  '/settings/', '/env/', '/__debug__/',
 ];
 
 function needsBodyCapture(path) {
@@ -231,8 +235,68 @@ function checkForDjangoDebug(text) {
   return markers.some(m => text.includes(m));
 }
 
+const DJANGO_SECRET_PATTERNS = [
+  { key: 'SECRET_KEY', pattern: /SECRET_KEY[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'DATABASE_URL', pattern: /DATABASE_URL[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'DB_NAME', pattern: /(?:['"]NAME['"]|DB_NAME)[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'DB_USER', pattern: /(?:['"]USER['"]|DB_USER)[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'DB_PASSWORD', pattern: /(?:['"]PASSWORD['"]|DB_PASSWORD)[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'DB_HOST', pattern: /(?:['"]HOST['"]|DB_HOST)[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'DB_PORT', pattern: /(?:['"]PORT['"]|DB_PORT)[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'EMAIL_HOST', pattern: /EMAIL_HOST[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'EMAIL_PORT', pattern: /EMAIL_PORT[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'EMAIL_HOST_USER', pattern: /EMAIL_HOST_USER[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'EMAIL_HOST_PASSWORD', pattern: /EMAIL_HOST_PASSWORD[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'AWS_ACCESS_KEY_ID', pattern: /AWS_ACCESS_KEY_ID[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'AWS_SECRET_ACCESS_KEY', pattern: /AWS_SECRET_ACCESS_KEY[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'AWS_STORAGE_BUCKET_NAME', pattern: /AWS_STORAGE_BUCKET_NAME[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'ALLOWED_HOSTS', pattern: /ALLOWED_HOSTS[:\s]*\[([^\]]+)\]/ },
+  { key: 'ADMIN_URL', pattern: /ADMIN_URL[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'CACHE_HOST', pattern: /CACHE_HOST[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'REDIS_URL', pattern: /REDIS_URL[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'CELERY_BROKER_URL', pattern: /CELERY_BROKER_URL[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'SENTRY_DSN', pattern: /SENTRY_DSN[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'SOCIAL_AUTH_*', pattern: /SOCIAL_AUTH_[A-Z_]+[:\s]*['"]([^'"]+)['"]/ },
+];
+
+function extractDjangoDebugData(text) {
+  if (!text) return [];
+  const findings = [];
+  const seen = new Set();
+
+  for (const { key, pattern } of DJANGO_SECRET_PATTERNS) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const val = match[1].trim();
+      if (!seen.has(key)) {
+        seen.add(key);
+        findings.push({ key, value: val });
+      }
+    }
+  }
+
+  const broadPattern = /['"]([A-Z][A-Z0-9_]*(?:KEY|SECRET|PASSWORD|TOKEN|ACCESS|SALT|LOGIN))['"][:\s]*['"]([^'"]{4,})['"]/gi;
+  let m;
+  while ((m = broadPattern.exec(text)) !== null) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1]);
+      findings.push({ key: m[1], value: m[2] });
+    }
+  }
+
+  const broadEnvPattern = /^([A-Z][A-Z0-9_]*(?:KEY|SECRET|PASSWORD|TOKEN|ACCESS|SALT|LOGIN))\s*=\s*(.+)$/gm;
+  while ((m = broadEnvPattern.exec(text)) !== null) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1]);
+      findings.push({ key: m[1], value: m[2].trim() });
+    }
+  }
+
+  return findings;
+}
+
 function isSoft404(result, baseline) {
-  if (!baseline || result.status === 404) return result.status === 404;
+  if (!baseline || baseline.error || result.status === 404) return result.status === 404;
   if (result.status !== 200 && result.status !== 403) return false;
   if (result.fingerprint && baseline.fingerprint && result.fingerprint === baseline.fingerprint) {
     return true;
