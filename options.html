@@ -30,6 +30,14 @@
   </label>
 
   <fieldset>
+    <legend>Протокол сканирования</legend>
+    <label><input type="radio" name="scanProtocol" value="https" checked> Только HTTPS</label>
+    <label><input type="radio" name="scanProtocol" value="http"> Только HTTP</label>
+    <label><input type="radio" name="scanProtocol" value="both"> HTTPS + HTTP (оба)</label>
+    <p class="hint">Если сайт отвечает только по одному протоколу, выберите «оба» для максимального покрытия.</p>
+  </fieldset>
+
+  <fieldset>
     <legend>Категории путей</legend>
     <p class="hint">Категории определяются по секциям в wordlist.txt. Пути без секции классифицируются автоматически.</p>
     <label><input type="checkbox" class="category" data-cat="git" checked> Git / VCS</label>

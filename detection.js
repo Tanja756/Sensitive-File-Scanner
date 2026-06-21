@@ -216,7 +216,90 @@ function detectPhpMyAdmin(results) {
   };
 }
 
-function analyzeAll(results) {
+function detectIIS(results) {
+  const hasWebConfig = results.some(r => r.path === '/web.config' && scanHit(r));
+  const hasIisStart = results.some(r => r.path === '/iisstart.htm' && scanHit(r));
+  const hasAppCode = results.some(r => r.path === '/App_Code/' && scanHit(r));
+  const hasAppData = results.some(r => r.path === '/App_Data/' && scanHit(r));
+  const hasBin = results.some(r => r.path === '/bin/' && scanHit(r));
+  const hasGlobalAsax = results.some(r => r.path === '/global.asax' && scanHit(r));
+  const isIIS = hasWebConfig || hasIisStart || hasAppCode || hasAppData || hasBin || hasGlobalAsax;
+  if (!isIIS) return null;
+
+  const vulns = [];
+  if (hasWebConfig) {
+    const configResult = results.find(r => r.path === '/web.config');
+    if (configResult && configResult.size > 0) vulns.push('iis_webconfig_exposed');
+    ['/web.config.bak', '/web.config.old', '/web.config.save', '/web.config~'].forEach(bak => {
+      if (results.some(r => r.path === bak && scanHit(r))) vulns.push('iis_webconfig_backup');
+    });
+  }
+  if (results.some(r => r.path === '/App_Offline.htm' && scanHit(r) && r.size > 0)) vulns.push('iis_app_offline');
+  if (results.some(r => (r.path === '/Trace.axd' || r.path === '/trace.axd') && scanHit(r))) vulns.push('iis_trace_enabled');
+  if (results.some(r => (r.path === '/elmah.axd' || r.path === '/ELMAH/elmah.axd') && scanHit(r))) vulns.push('iis_elmah_exposed');
+
+  const dirPaths = ['/bin/', '/App_Code/', '/App_Data/', '/Scripts/', '/Content/', '/Views/'];
+  for (const dir of dirPaths) {
+    const result = results.find(r => r.path === dir && scanHit(r));
+    if (result && result.status === 200 && result.bodySnippet) {
+      const body = result.bodySnippet.toLowerCase();
+      if (body.includes('[parent directory]') || body.includes('index of ') || body.includes('<title>index of') || body.includes('parent directory')) {
+        vulns.push('iis_directory_listing');
+        break;
+      }
+    }
+  }
+
+  if (hasAppCode || hasAppData) vulns.push('iis_source_exposed');
+  const subConfigs = ['/Views/web.config', '/Areas/Admin/Views/web.config', '/App_Data/web.config'];
+  for (const sub of subConfigs) {
+    if (results.some(r => r.path === sub && scanHit(r) && r.size > 0)) vulns.push('iis_sub_webconfig');
+  }
+  if (results.some(r => (/^\/webdav\/?$/i.test(r.path) || /^\/dav\/?$/i.test(r.path)) && scanHit(r))) vulns.push('iis_webdav_enabled');
+  if (results.some(r => /^\/aspnet_client\//.test(r.path) && scanHit(r))) vulns.push('iis_aspnet_version_disclosure');
+  if (results.some(r => /^\/WebResource\.axd/.test(r.path) && scanHit(r))) vulns.push('iis_webresource_exposed');
+  if (results.some(r => /^\/appsettings\.(?:json|Development\.json|Production\.json)/.test(r.path) && scanHit(r))) vulns.push('iis_appsettings_exposed');
+
+  return { name: 'IIS', confidence: 'high', vulnerabilities: vulns };
+}
+
+function detectServerBy404(text, headers, status) {
+  if (status !== 404) return null;
+  const serverHeader = headers && headers['server'] ? headers['server'].toLowerCase() : '';
+  const lowerText = text.toLowerCase();
+
+  if (serverHeader.includes('nginx')) return { name: 'nginx', confidence: 'high' };
+  if (serverHeader.includes('apache')) return { name: 'Apache', confidence: 'high' };
+  if (serverHeader.includes('microsoft-iis')) return { name: 'IIS', confidence: 'high' };
+  if (serverHeader.includes('tomcat')) return { name: 'Apache Tomcat', confidence: 'high' };
+  if (serverHeader.includes('jetty')) return { name: 'Jetty', confidence: 'high' };
+  if (serverHeader.includes('caddy')) return { name: 'Caddy', confidence: 'high' };
+  if (serverHeader.includes('openresty')) return { name: 'OpenResty', confidence: 'high' };
+  if (serverHeader.includes('werkzeug')) return { name: 'Flask (Werkzeug)', confidence: 'high' };
+
+  if (lowerText.includes('<h1>404 not found</h1>') && lowerText.includes('nginx')) return { name: 'nginx', confidence: 'high' };
+  if (lowerText.includes('<h1>not found</h1>') && lowerText.includes('the requested url was not found on this server.')) return { name: 'Apache', confidence: 'high' };
+  if (lowerText.includes('server error</h1>') && lowerText.includes('404 - file or directory not found.')) return { name: 'IIS', confidence: 'high' };
+  if (lowerText.includes('<h1>not found</h1>') && lowerText.includes('the requested url was not found on the server.') && !lowerText.includes('on this server')) return { name: 'Flask (Werkzeug)', confidence: 'high' };
+  if (lowerText.includes('<h1>not found</h1>') && lowerText.includes('the requested resource was not found on this server.')) return { name: 'Django', confidence: 'high' };
+  if (lowerText.includes('<h1>404</h1>') && lowerText.includes('not found') && lowerText.includes('laravel')) return { name: 'Laravel', confidence: 'high' };
+  if (lowerText.includes('oops! an error occurred') && lowerText.includes('the server returned a "404 not found".')) return { name: 'Symfony', confidence: 'high' };
+  if (lowerText.includes('cannot get /') && lowerText.includes('error')) return { name: 'Express.js', confidence: 'high' };
+  if (lowerText.includes('<h1>404</h1>') && lowerText.includes('this page could not be found.')) return { name: 'Next.js', confidence: 'high' };
+  if (lowerText.includes('whitelabel error page') && lowerText.includes('this application has no explicit mapping for /error')) return { name: 'Spring Boot', confidence: 'high' };
+  if (lowerText.includes('http status 404 – not found') && lowerText.includes('the origin server did not find a current representation')) return { name: 'Apache Tomcat', confidence: 'high' };
+  if (lowerText.includes('error 404 - not found') && lowerText.includes('powered by eclipse jetty')) return { name: 'Jetty', confidence: 'high' };
+  if (lowerText.includes('the page you were looking for doesn\'t exist.')) return { name: 'Ruby on Rails', confidence: 'high' };
+  if (lowerText.includes('sinatra doesn\'t know this ditty.')) return { name: 'Sinatra', confidence: 'high' };
+  if (lowerText.includes('server error in \'/\' application.') && lowerText.includes('the resource cannot be found.')) return { name: 'ASP.NET', confidence: 'high' };
+  if (serverHeader) {
+    const parts = serverHeader.split('/');
+    return { name: parts[0].trim(), confidence: 'low' };
+  }
+  return null;
+}
+
+function analyzeAll(results, serverInfo = null) {
   const tech = [];
   const wordpress = detectWordPress(results);
   if (wordpress) tech.push(wordpress);
@@ -260,10 +343,16 @@ function analyzeAll(results) {
   if (phpMyAdmin) {
     tech.push({ name: phpMyAdmin.name, confidence: phpMyAdmin.confidence, version: phpMyAdmin.version });
   }
+  const iis = detectIIS(results);
+  if (iis) tech.push({ name: iis.name, confidence: iis.confidence });
+  if (serverInfo) tech.push({ name: serverInfo.name, confidence: serverInfo.confidence });
 
   const vulns = [];
   if (phpMyAdmin && phpMyAdmin.vulnerabilities) {
     phpMyAdmin.vulnerabilities.forEach(v => vulns.push(v));
+  }
+  if (iis && iis.vulnerabilities) {
+    iis.vulnerabilities.forEach(v => vulns.push(v));
   }
   if (results.some(r => r.path.startsWith('/.git/') && scanHit(r))) vulns.push('exposed_git');
   if (results.some(r => r.path === '/.env' && scanHit(r))) vulns.push('env_exposed');
@@ -302,6 +391,14 @@ function analyzeAll(results) {
 
   // Django debug data exposure
   if (results.some(r => r.debugData && r.debugData.length > 0)) vulns.push('django_debug_data_exposed');
+
+  // Secrets in response body
+  const secretsInResponse = results.filter(r => r.secrets && r.secrets.length > 0);
+  if (secretsInResponse.length > 0) {
+    const hasCritical = secretsInResponse.some(r => r.secrets.some(s => s.severity === 'critical'));
+    const hasHigh = secretsInResponse.some(r => r.secrets.some(s => s.severity === 'high'));
+    vulns.push(hasCritical ? 'secrets_exposed' : hasHigh ? 'secrets_exposed' : 'secrets_exposed');
+  }
 
   // WordPress-specific vulnerabilities
   if (results.some(r => r.path === '/xmlrpc.php' && scanHit(r))) vulns.push('wp_xmlrpc_enabled');

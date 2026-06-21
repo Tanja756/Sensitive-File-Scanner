@@ -79,7 +79,20 @@ const VULN_LABELS = {
   pma_vuln_cve_2022_23804: { label: 'CVE-2022-23804: phpMyAdmin < 5.2.0 XSS via Twig', severity: 'high' },
   pma_vuln_cve_2023_25776: { label: 'CVE-2023-25776: phpMyAdmin < 5.2.1 SQL Injection', severity: 'critical' },
   pma_vuln_cve_2023_24810: { label: 'CVE-2023-24810: phpMyAdmin < 5.2.2 XSS via drag-and-drop', severity: 'high' },
-  django_debug_data_exposed: { label: 'Режим отладки Django — раскрыты ключи/пароли', severity: 'critical' }
+  django_debug_data_exposed: { label: 'Режим отладки Django — раскрыты ключи/пароли', severity: 'critical' },
+  // IIS-specific
+  iis_webconfig_exposed: { label: 'web.config доступен (содержит ключи/строки подключения)', severity: 'critical' },
+  iis_webconfig_backup: { label: 'Бэкап web.config доступен', severity: 'critical' },
+  iis_app_offline: { label: 'App_Offline.htm доступен (индикация временного отключения)', severity: 'low' },
+  iis_trace_enabled: { label: 'ASP.NET Tracing (Trace.axd) включён', severity: 'high' },
+  iis_elmah_exposed: { label: 'ELMAH (elmah.axd) доступен — утечка ошибок', severity: 'high' },
+  iis_directory_listing: { label: 'Листинг директорий включён (риск перечисления файлов)', severity: 'high' },
+  iis_source_exposed: { label: 'Исходный код (App_Code/App_Data) доступен', severity: 'critical' },
+  iis_sub_webconfig: { label: 'web.config в подкаталоге доступен', severity: 'high' },
+  iis_webdav_enabled: { label: 'WebDAV включён (риск загрузки/изменения файлов)', severity: 'high' },
+  iis_aspnet_version_disclosure: { label: 'Раскрыта версия ASP.NET через aspnet_client', severity: 'medium' },
+  iis_webresource_exposed: { label: 'WebResource.axd доступен (может раскрыть сборки)', severity: 'medium' },
+  iis_appsettings_exposed: { label: 'appsettings.json доступен (секреты .NET Core)', severity: 'critical' }
 };
 
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -257,6 +270,15 @@ const DJANGO_SECRET_PATTERNS = [
   { key: 'CELERY_BROKER_URL', pattern: /CELERY_BROKER_URL[:\s]*['"]([^'"]+)['"]/ },
   { key: 'SENTRY_DSN', pattern: /SENTRY_DSN[:\s]*['"]([^'"]+)['"]/ },
   { key: 'SOCIAL_AUTH_*', pattern: /SOCIAL_AUTH_[A-Z_]+[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'ADMINS', pattern: /ADMINS?\s*[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'SENDGRID_API_KEY', pattern: /SENDGRID_API_KEY[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'STRIPE_API_KEY', pattern: /STRIPE(?:_LIVE|_TEST|_SECRET|_PUBLISHABLE|_API)?_KEY[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'RECAPTCHA_SECRET', pattern: /(?:RECAPTCHA|NOCAPTCHA)_?(?:SECRET|SITE|PRIVATE)?_?KEY[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'JWT_SECRET', pattern: /(?:JWT|JWS)_?(?:SECRET|SIGNING|VERIFICATION)_?(?:KEY)?[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'OAUTH_TOKEN', pattern: /(?:SOCIAL_AUTH|OAUTH|OAUTH2)_?(?:[A-Z_]*_)?(?:TOKEN|SECRET|KEY)[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'CACHE_PASSWORD', pattern: /CACHE_PASSWORD[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'REDIS_PASSWORD', pattern: /REDIS(?:TOWER|_)?PASSWORD[:\s]*['"]([^'"]+)['"]/ },
+  { key: 'HASHIDS_SALT', pattern: /HASHIDS_SALT[:\s]*['"]([^'"]+)['"]/ },
 ];
 
 function extractDjangoDebugData(text) {
@@ -264,7 +286,18 @@ function extractDjangoDebugData(text) {
   const findings = [];
   const seen = new Set();
 
+  // Extract setting→value pairs from HTML debug table first
+  // <th>KEY</th><td class="code"><pre>'value'</pre></td>
+  const htmlTableRE = /<th>([A-Z][A-Z0-9_]+)<\/th><td[^>]*><pre>\s*['"]?([^<]+?)['"]?\s*<\/pre><\/td>/gi;
+  const htmlPairs = [];
+  let hm;
+  while ((hm = htmlTableRE.exec(text)) !== null) {
+    htmlPairs.push({ key: hm[1], value: hm[2].trim() });
+  }
+
+  // Check named patterns against both plain text AND html pairs
   for (const { key, pattern } of DJANGO_SECRET_PATTERNS) {
+    // Try plain-text match
     const match = text.match(pattern);
     if (match && match[1]) {
       const val = match[1].trim();
@@ -272,10 +305,17 @@ function extractDjangoDebugData(text) {
         seen.add(key);
         findings.push({ key, value: val });
       }
+    } else {
+      // Try HTML table context
+      const htmlMatch = htmlPairs.find(p => p.key === key);
+      if (htmlMatch && !seen.has(key)) {
+        seen.add(key);
+        findings.push({ key, value: htmlMatch.value });
+      }
     }
   }
 
-  const broadPattern = /['"]([A-Z][A-Z0-9_]*(?:KEY|SECRET|PASSWORD|TOKEN|ACCESS|SALT|LOGIN))['"][:\s]*['"]([^'"]{4,})['"]/gi;
+  const broadPattern = /['"]([A-Z][A-Z0-9_]*(?:KEY|SECRET|PASSWORD|TOKEN|ACCESS|SALT|LOGIN|DSN))['"][:\s]*['"]([^'"]{4,})['"]/gi;
   let m;
   while ((m = broadPattern.exec(text)) !== null) {
     if (!seen.has(m[1])) {
@@ -292,16 +332,184 @@ function extractDjangoDebugData(text) {
     }
   }
 
+  // Catch‑all: any HTML table row with credential‑looking name not yet found
+  for (const p of htmlPairs) {
+    if (!seen.has(p.key) && /(?:KEY|SECRET|TOKEN|PASSWORD|SALT|DSN|ACCESS)/i.test(p.key) && p.value.length > 3) {
+      seen.add(p.key);
+      findings.push(p);
+    }
+  }
+
   return findings;
+}
+
+const CATCH_ALL_PATTERNS = [
+  /404 Not Found/i,
+  /Page Not Found/i,
+  /Page not found/i,
+  /Not Found/i,
+  /Access Denied/i,
+  /Access denied/i,
+  /Something went wrong/i,
+  /Oops/i,
+  /nginx/i,
+  /Apache.*is functioning normally/i,
+  /Страница не найдена/i,
+  /Не найдено/i,
+  /Доступ запрещён/i,
+  /Доступ запрещен/i,
+  /Ничего не найдено/i
+];
+
+function is_catch_all_page(text) {
+  if (!text) return false;
+  let matches = 0;
+  for (const re of CATCH_ALL_PATTERNS) {
+    if (re.test(text)) matches++;
+  }
+  return matches >= 2;
+}
+
+function deduplicate_by_fingerprint(results) {
+  const seen = new Map();
+  for (const r of results) {
+    if (r.status !== 200 && r.status !== 403) continue;
+    if (r.signatureOk) continue; // verified real finding
+    if (!r.fingerprint || r.fingerprint === '0:0') continue;
+    if (seen.has(r.fingerprint)) {
+      seen.get(r.fingerprint).push(r);
+    } else {
+      seen.set(r.fingerprint, [r]);
+    }
+  }
+  let deduped = 0;
+  for (const [, group] of seen) {
+    if (group.length >= 2) {
+      for (const r of group) {
+        if (!r.catchAllDup) {
+          r.catchAllDup = true;
+          r.interesting = false;
+          deduped++;
+        }
+      }
+    }
+  }
+  return deduped;
 }
 
 function isSoft404(result, baseline) {
   if (!baseline || baseline.error || result.status === 404) return result.status === 404;
   if (result.status !== 200 && result.status !== 403) return false;
-  if (result.fingerprint && baseline.fingerprint && result.fingerprint === baseline.fingerprint) {
-    return true;
+  if (result.fingerprint && baseline.fingerprint) {
+    if (result.fingerprint === baseline.fingerprint) return true;
+    if (baseline.fingerprints && baseline.fingerprints.some(fp => fp === result.fingerprint)) return true;
   }
   return false;
+}
+
+const SECRET_RULES = [
+  { id: 'sift-key', name: 'Sift_Key', patterns: [/\.with(?:AccountId|BeaconKey)\(["'].*["']\)/], severity: 'medium' },
+  { id: 'sentry-dsn', name: 'Sentry_DSN', patterns: [/https?:\/\/(\w+)(:\w+)?@sentry\.io\/[0-9]+/], severity: 'medium' },
+  { id: 'intercom-api-key', name: 'Intercom_API_Key', patterns: [/Intercom\.initialize\(["']?\w+["']?,\s?["']?\w+["']?,\s?["']?\w+["']?\)/], severity: 'medium' },
+  { id: 'singular-config', name: 'Singular_Config', patterns: [/SingularConfig\(["']?[\w._]+["']?,\s?["']?[\w._]+["']?\)/], severity: 'low' },
+  { id: 'adjust-config', name: 'Adjust_Config', patterns: [/AdjustConfig\(["']?[\w]+["']?,\s?["']?[\w]+["']?(,\s?["']?[\w]+["']?)?\)/, /([aA]djust)?[Cc]onfig\.setAppSecret\(.*\)/], severity: 'medium' },
+  { id: 'bitmovin-api-key', name: 'Bitmovin_API_Key', patterns: [/BITMOVIN_API_KEY\s?=\s?["']?.*["']?/], severity: 'high' },
+  { id: 'salesforce-mc-token', name: 'Salesforce_MC_Token', patterns: [/setAccessToken\(\w+\.MC_ACCESS_TOKEN\)/], severity: 'high' },
+  { id: 'appdynamics-key', name: 'AppDynamics_Key', patterns: [/AgentConfiguration\.builder\(\)(\s*)?([.\w()\s]+)\.withAppKey\(.*?\)/], severity: 'medium' },
+  { id: 'appcenter-secret', name: 'AppCenter_Secret', patterns: [/AppCenter\.(configure|start)\(.*\)/], severity: 'medium' },
+  { id: 'aws-access-key-id', name: 'AWS_Access_Key_ID', patterns: [/([^A-Z0-9]|^)(AKIA|A3T|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{12,}/], severity: 'critical' },
+  { id: 'aws-s3-bucket', name: 'S3_Bucket', patterns: [/\/\/s3-[a-z0-9-]+\.amazonaws\.com\/[a-z0-9._-]+/, /\/\/s3\.amazonaws\.com\/[a-z0-9._-]+/, /[a-z0-9.-]+\.s3-[a-z0-9-]\.amazonaws\.com/, /[a-z0-9.-]+\.s3-website[.-](eu|ap|us|ca|sa|cn)/, /[a-z0-9.-]+\.s3\.amazonaws\.com/, /amzn\.mws\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/], severity: 'medium' },
+  { id: 'artifactory-api-token', name: 'Artifactory_API_Token', patterns: [/(?:\s|=|:|"|^)AKC[a-zA-Z0-9]{10,}/], severity: 'high' },
+  { id: 'artifactory-password', name: 'Artifactory_Password', patterns: [/(?:\s|=|:|"|^)AP[\dABCDEF][a-zA-Z0-9]{8,}/], severity: 'high' },
+  { id: 'auth-basic', name: 'Authorization_Basic', patterns: [/basic\s[a-zA-Z0-9_\-:.=]+/i], severity: 'high' },
+  { id: 'auth-bearer', name: 'Authorization_Bearer', patterns: [/bearer\s[a-zA-Z0-9_\-:.=]+/i], severity: 'high' },
+  { id: 'aws-api-key', name: 'AWS_API_Key', patterns: [/AKIA[0-9A-Z]{16}/], severity: 'critical' },
+  { id: 'basic-auth-creds', name: 'Basic_Auth_Credentials', patterns: [/:\/\/[a-zA-Z0-9]+:[a-zA-Z0-9]+@[a-zA-Z0-9]+\.[a-zA-Z]+/], severity: 'high' },
+  { id: 'cloudinary-basic-auth', name: 'Cloudinary_Basic_Auth', patterns: [/cloudinary:\/\/[0-9]{15}:[0-9A-Za-z]+@[a-z]+/], severity: 'high' },
+  { id: 'dynatrace-token', name: 'Dynatrace_Token', patterns: [/dt0[a-zA-Z]{1}[0-9]{2}\.[A-Z0-9]{24}\.[A-Z0-9]{64}/], severity: 'high' },
+  { id: 'discord-bot-token', name: 'Discord_BOT_Token', patterns: [/((?:N|M|O)[a-zA-Z0-9]{23}\.[a-zA-Z0-9-_]{6}\.[a-zA-Z0-9-_]{27})/], severity: 'high' },
+  { id: 'facebook-access-token', name: 'Facebook_Access_Token', patterns: [/EAACEdEose0cBA[0-9A-Za-z]+/], severity: 'high' },
+  { id: 'facebook-client-id', name: 'Facebook_ClientID', patterns: [/[fF][aA][cC][eE][bB][oO][oO][kK](.{0,20})?["'][0-9]{13,17}/], severity: 'high' },
+  { id: 'facebook-oauth', name: 'Facebook_OAuth', patterns: [/[fF][aA][cC][eE][bB][oO][oO][kK].*["'][0-9a-f]{32}["']/], severity: 'high' },
+  { id: 'facebook-secret-key', name: 'Facebook_Secret_Key', patterns: [/([fF][aA][cC][eE][bB][oO][oO][kK]|[fF][bB])(.{0,20})?["'][0-9a-f]{32}/], severity: 'critical' },
+  { id: 'firebase', name: 'Firebase_URL', patterns: [/[a-z0-9.-]+\.firebaseio\.com/, /[a-z0-9.-]+\.firebaseapp\.com/], severity: 'medium' },
+  { id: 'generic-api-key', name: 'Generic_API_Key', patterns: [/[aA][pP][iI][_]?[kK][eE][yY].*["'][0-9a-zA-Z]{32,45}["']/], severity: 'medium' },
+  { id: 'generic-secret', name: 'Generic_Secret', patterns: [/[sS][eE][cC][rR][eE][tT].*["'][0-9a-zA-Z]{32,45}["']/], severity: 'high' },
+  { id: 'github', name: 'GitHub_Token', patterns: [/[gG][iI][tT][hH][uU][bB].*["'][0-9a-zA-Z]{35,40}["']/], severity: 'high' },
+  { id: 'github-access-token', name: 'GitHub_Access_Token', patterns: [/[a-zA-Z0-9_-]*:[a-zA-Z0-9_-]+@github\.com/], severity: 'high' },
+  { id: 'google-api-key', name: 'Google_API_Key', patterns: [/AIza[0-9A-Za-z\-_]{35}/], severity: 'high' },
+  { id: 'google-cloud-oauth', name: 'Google_Cloud_OAuth', patterns: [/[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com/], severity: 'high' },
+  { id: 'google-cloud-service-account', name: 'Google_Service_Account', patterns: [/"type":\s*"service_account"/], severity: 'high' },
+  { id: 'google-oauth-access-token', name: 'Google_OAuth_Access_Token', patterns: [/ya29\.[0-9A-Za-z\-_]+/], severity: 'high' },
+  { id: 'heroku-api-key', name: 'Heroku_API_Key', patterns: [/[hH][eE][rR][oO][kK][uU].*[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/], severity: 'high' },
+  { id: 'mailchimp-api-key', name: 'MailChimp_API_Key', patterns: [/[0-9a-f]{32}-us[0-9]{1,2}/], severity: 'high' },
+  { id: 'mailgun-api-key', name: 'Mailgun_API_Key', patterns: [/key-[0-9a-zA-Z]{32}/], severity: 'high' },
+  { id: 'password-in-url', name: 'Password_in_URL', patterns: [/[a-zA-Z]{3,10}:\/\/[^\/\s:@]{3,20}:[^\/\s:@]{3,20}@.{1,100}/], severity: 'critical' },
+  { id: 'paypal-braintree-token', name: 'PayPal_Braintree_Token', patterns: [/access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}/], severity: 'high' },
+  { id: 'pgp-private-key', name: 'PGP_Private_Key', patterns: [/-----BEGIN PGP PRIVATE KEY BLOCK-----/], severity: 'critical' },
+  { id: 'picatic-api-key', name: 'Picatic_API_Key', patterns: [/sk_live_[0-9a-z]{32}/], severity: 'high' },
+  { id: 'rsa-private-key', name: 'RSA_Private_Key', patterns: [/-----BEGIN RSA PRIVATE KEY-----/], severity: 'critical' },
+  { id: 'slack-token', name: 'Slack_Token', patterns: [/xox[pboa]-[0-9]{12}-[0-9]{12}-[0-9]{12}-[a-z0-9]{32}/, /xox[baprs]-([0-9a-zA-Z]{10,48})?/], severity: 'high' },
+  { id: 'slack-webhook', name: 'Slack_Webhook', patterns: [/https:\/\/hooks\.slack\.com\/services\/T[a-zA-Z0-9_]+\/B[a-zA-Z0-9_]+\/[a-zA-Z0-9_]+/], severity: 'high' },
+  { id: 'square-access-token', name: 'Square_Access_Token', patterns: [/sq0atp-[0-9A-Za-z\-_]{22}/], severity: 'high' },
+  { id: 'square-oauth-secret', name: 'Square_OAuth_Secret', patterns: [/sq0csp-[0-9A-Za-z\-_]{43}/], severity: 'high' },
+  { id: 'ssh-dsa-private-key', name: 'SSH_DSA_Private_Key', patterns: [/-----BEGIN DSA PRIVATE KEY-----/], severity: 'critical' },
+  { id: 'ssh-ec-private-key', name: 'SSH_EC_Private_Key', patterns: [/-----BEGIN EC PRIVATE KEY-----/], severity: 'critical' },
+  { id: 'stripe-api-key', name: 'Stripe_API_Key', patterns: [/sk_live_[0-9a-zA-Z]{24}/], severity: 'critical' },
+  { id: 'stripe-restricted-api-key', name: 'Stripe_Restricted_API_Key', patterns: [/rk_live_[0-9a-zA-Z]{24}/], severity: 'critical' },
+  { id: 'twilio-api-key', name: 'Twilio_API_Key', patterns: [/SK[0-9a-fA-F]{32}/], severity: 'high' },
+  { id: 'twitter-access-token', name: 'Twitter_Access_Token', patterns: [/[tT][wW][iI][tT][tT][eE][rR].*[1-9][0-9]+-[0-9a-zA-Z]{40}/], severity: 'high' },
+  { id: 'twitter-client-id', name: 'Twitter_ClientID', patterns: [/[tT][wW][iI][tT][tT][eE][rR](.{0,20})?["'][0-9a-z]{18,25}/], severity: 'high' },
+  { id: 'twitter-oauth', name: 'Twitter_OAuth', patterns: [/[tT][wW][iI][tT][tT][eE][rR].*["'][0-9a-zA-Z]{35,44}["']/], severity: 'high' },
+  { id: 'twitter-secret-key', name: 'Twitter_Secret_Key', patterns: [/[tT][wW][iI][tT][tT][eE][rR](.{0,20})?["'][0-9a-z]{35,44}/], severity: 'critical' },
+  { id: 'private-key', name: 'Private_Key', patterns: [/BEGIN OPENSSH PRIVATE KEY/, /BEGIN PRIVATE KEY/, /BEGIN RSA PRIVATE KEY/, /BEGIN DSA PRIVATE KEY/, /BEGIN EC PRIVATE KEY/, /BEGIN PGP PRIVATE KEY BLOCK/, /ssh-rsa AAAA/], severity: 'critical' },
+  { id: 'sendgrid-api-key', name: 'Sendgrid_API_Key', patterns: [/SG\.[a-zA-Z0-9_]{22}\.[a-zA-Z0-9_\-]{43}/], severity: 'high' },
+  { id: 'shopify-access-token', name: 'Shopify_Access_Token', patterns: [/shp[a-zA-Z0-9_]{32}/, /shpat_[a-fA-F0-9]{32}/], severity: 'high' },
+  { id: 'shopify-api-key', name: 'Shopify_API_Key', patterns: [/shpca_[a-zA-Z0-9_]{32}/], severity: 'high' },
+  { id: 'shopify-password', name: 'Shopify_Password', patterns: [/shppa_[a-zA-Z0-9_]{32}/], severity: 'high' },
+  { id: 'shopify-secret-key', name: 'Shopify_Secret_Key', patterns: [/shpss_[a-zA-Z0-9_]{32}/], severity: 'critical' },
+  { id: 'fcm-server-key', name: 'FCM_Server_Key', patterns: [/AAAA[a-zA-Z0-9_-]{7}:[a-zA-Z0-9_-]{140}/], severity: 'high' },
+];
+
+function maskSecret(value) {
+  if (!value) return '';
+  if (value.length <= 8) return '*'.repeat(value.length);
+  const first4 = value.slice(0, 4);
+  const last4 = value.slice(-4);
+  const middle = '*'.repeat(Math.min(value.length - 8, 20));
+  return first4 + middle + last4;
+}
+
+function scanBodyForSecrets(text) {
+  if (!text) return [];
+  const findings = [];
+  const seen = new Set();
+  for (const rule of SECRET_RULES) {
+    for (const pattern of rule.patterns) {
+      const m = pattern.exec(text);
+      if (!m) continue;
+      const match = m[0] || m[1] || '';
+      if (match.length < 6) continue;
+      const key = rule.id + '|' + match;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const idx = m.index;
+      const before = text.slice(Math.max(0, idx - 40), idx);
+      const after = text.slice(idx + match.length, idx + match.length + 40);
+      findings.push({
+        ruleId: rule.id,
+        ruleName: rule.name,
+        match: match.slice(0, 100),
+        masked: maskSecret(match),
+        before: before.replace(/\n/g, ' ').trim(),
+        after: after.replace(/\n/g, ' ').trim(),
+        severity: rule.severity
+      });
+      if (findings.length >= 20) break;
+    }
+    if (findings.length >= 20) break;
+  }
+  return findings;
 }
 
 function buildUrl(path, baseUrl, mode) {

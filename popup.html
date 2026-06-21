@@ -92,6 +92,17 @@
     .toolbar { margin-bottom: 6px; }
     .options-link { font-size: 12px; text-decoration: none; color: inherit; }
     #stopBtn { color: #c0392b; }
+    .secret-badge {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 5px;
+      font-size: 10px;
+      background: #c0392b;
+      color: white;
+      border-radius: 8px;
+      cursor: help;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
@@ -113,10 +124,13 @@
     <button id="scanWPBtn" style="background:#21759b;color:white;border-color:#21759b;">WordPress Scan</button>
     <button id="scanPmaBtn" style="background:#f7930c;color:white;border-color:#f7930c;">phpMyAdmin Scan</button>
     <button id="scanDjangoBtn" style="background:#092e20;color:white;border-color:#092e20;">Django Scan</button>
+    <button id="scanIISBtn" style="background:#005a9c;color:white;border-color:#005a9c;">IIS Scan</button>
+    <button id="detectServerBtn">Определить технологию</button>
     <button id="pauseBtn" class="hidden">⏸ Пауза</button>
     <button id="stopBtn" class="hidden">⏹ Стоп</button>
   </div>
   <div id="status">Ожидание...</div>
+  <div id="serverInfo" class="hidden" style="margin:4px 0;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;font-weight:bold;">🌐 Сервер: <span id="serverName"></span></div>
   <div id="lastScanInfo" class="hidden"></div>
   <div id="historyPanel">
     <label>История: </label>

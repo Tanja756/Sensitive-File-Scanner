@@ -275,6 +275,14 @@
 /ftp/.env
 /rails/.env
 /kibana/.env
+/admin/.env
+/core/.env
+/twilio/.env.php
+/sendgrid/.env.php
+/test/.env.php
+/config/.env.php
+/var/.env.local.php
+/app_dev.php/_profiler/.env
 
   // ========== JS Source Bundles ==========
 /app.js
@@ -323,6 +331,31 @@
 /evox/about
 /cgi-bin/authLogin.cgi
 /cgi-bin/
+/cgi-bin/luci/
+/cgi-bin/luci/;stok=/locale
+/cgi-bin/cstecgi.cgi
+/cgi-bin/cstecgi.cgi?loginauth
+/cgi-bin/glc
+/SDK/webLanguage
+/webui/
+/hello.world
+/debug.htm
+/shell
+/goform/
+/goform/PortalAuth
+/goform/WriteFacMac
+/goform/set_LimitClient_cfg
+/goform/L7Im
+/goform/goform_get_cmd_process
+/goform/formConfigDnsFilterGlobal
+/goform/formSetLanguage
+/goform/frmL7ProtForm
+/goform/formMultiApnSetting
+/action/
+/action/SetRemoteAccessCfg
+/userRpm/
+/userRpmNatDebugRpm26525557/start_art.html
+/userRpm/popupSiteSurveyRpm.htm
 
   // ========== Пакетные менеджеры (lock-файлы) ==========
 /composer.json
@@ -344,6 +377,12 @@
 /credentials
 /robots.txt
 /sitemap.xml
+/login
+/sdk
+/wordpress/
+/old/
+/new/
+/wp/
 /crossdomain.xml
 /clientaccesspolicy.xml
 /.DS_Store

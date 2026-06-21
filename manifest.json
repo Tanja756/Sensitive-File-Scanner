@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Sensitive File Scanner",
-  "version": "1.5",
-  "description": "Проверяет сайт на наличие критичных файлов: категории, severity, HEAD, история сканов",
+  "version": "1.6",
+  "description": "Проверяет сайт на наличие критичных файлов: категории, severity, HEAD, история сканов, IIS scan",
   "permissions": ["activeTab", "storage", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "background": {
-    "scripts": ["scanner-utils.js", "detection.js", "background.js"]
+    "scripts": ["scanner-utils.js", "detection.js", "background.js"],
+    "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
@@ -16,6 +17,12 @@
     "page": "options.html",
     "open_in_tab": true
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["wordlist.txt", "wordlist-wp.txt", "wordlist-pma.txt", "wordlist-iis.txt"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "browser_specific_settings": {
     "gecko": {
       "id": "sensitive-scanner@example.com"

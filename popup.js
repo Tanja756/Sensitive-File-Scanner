@@ -147,12 +147,16 @@ function displayResults(interesting) {
     sevCell.className = `sev-${sev}`;
     sevCell.title = sev;
     const pathCell = row.insertCell();
-    const link = document.createElement('a');
-    link.href = item.fullUrl;
-    link.target = '_blank';
-    link.textContent = item.path;
-    link.style.color = 'inherit';
-    pathCell.appendChild(link);
+    const pathSpan = document.createElement('span');
+    pathSpan.textContent = item.path;
+    pathCell.appendChild(pathSpan);
+    if (item.secrets && item.secrets.length > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'secret-badge';
+      badge.textContent = `🔑 ${item.secrets.length}`;
+      badge.title = item.secrets.slice(0, 3).map(s => `${s.ruleName}: ${s.masked}`).join('\n');
+      pathCell.appendChild(badge);
+    }
     const statusCell = row.insertCell();
     statusCell.textContent = item.status;
     statusCell.className = `status-${item.status}`;
@@ -251,6 +255,15 @@ function handleScanComplete(msg, baseUrl, mode) {
   const analysis = msg.analysis || analyzeAll(enriched);
   const findingsCount = getInterestingResults(enriched).length;
 
+  const serverInfoDiv = document.getElementById('serverInfo');
+  const serverNameSpan = document.getElementById('serverName');
+  if (msg.serverInfo) {
+    serverNameSpan.textContent = msg.serverInfo.name + ' (' + msg.serverInfo.confidence + ')';
+    serverInfoDiv.classList.remove('hidden');
+  } else {
+    serverInfoDiv.classList.add('hidden');
+  }
+
   let statusMsg = '';
   if (msg.stopped) statusMsg = '⏹ Сканирование остановлено. ';
   if (msg.protocolNote) statusMsg += msg.protocolNote.replace(/\n/g, '<br>') + ' ';
@@ -316,6 +329,7 @@ function resetScanUI() {
   document.getElementById('filtersContainer').classList.add('hidden');
   document.getElementById('detectionPanel').classList.add('hidden');
   document.getElementById('securityHeaders').classList.add('hidden');
+  document.getElementById('serverInfo').classList.add('hidden');
   document.getElementById('progressContainer').classList.remove('hidden');
   document.getElementById('progressBar').value = 0;
   document.getElementById('progressText').textContent = '0 / 0';
@@ -334,9 +348,11 @@ function startScan(mode) {
   if (additionalButton) { additionalButton.innerHTML = '🔍'; additionalButton.disabled = false; additionalButton = null; }
   if (port) { port.disconnect(); port = null; }
   resetScanUI();
+  console.log('[Scanner] startScan mode=' + mode);
 
   browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
     const baseUrl = mode === 'path' ? tab.url : new URL(tab.url).origin;
+    console.log('[Scanner] baseUrl=' + baseUrl + ' mode=' + mode);
     port = browser.runtime.connect({ name: 'scanner' });
     port.onMessage.addListener((msg) => {
       if (msg.type === 'progress') {
@@ -346,15 +362,46 @@ function startScan(mode) {
         if (msg.rate !== undefined) text += ` (${msg.rate} req/s, ост. ~${msg.eta}с)`;
         document.getElementById('progressText').textContent = text;
       } else if (msg.type === 'result') {
+        console.log('[Scanner] scan complete, results=' + (msg.results || []).length + ' stopped=' + msg.stopped);
         handleScanComplete(msg, baseUrl, mode);
         port.disconnect();
         port = null;
+      } else if (msg.type === 'statusUpdate') {
+        document.getElementById('status').textContent = msg.text;
       }
     });
     port.postMessage({ command: 'start', url: baseUrl, mode });
   }).catch(err => {
-    console.error('[popup]', err);
+    console.error('[Scanner] startScan error', err);
     document.getElementById('status').textContent = 'Ошибка получения адреса страницы';
+  });
+}
+
+function detectServer() {
+  const statusDiv = document.getElementById('status');
+  const serverInfoDiv = document.getElementById('serverInfo');
+  const serverNameSpan = document.getElementById('serverName');
+  serverInfoDiv.classList.add('hidden');
+  statusDiv.textContent = 'Определение сервера...';
+
+  browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+    const baseUrl = new URL(tab.url).origin;
+    const detectPort = browser.runtime.connect({ name: 'scanner' });
+    detectPort.onMessage.addListener((msg) => {
+      if (msg.type === 'serverDetected') {
+        if (msg.serverInfo) {
+          serverNameSpan.textContent = msg.serverInfo.name + ' (' + msg.serverInfo.confidence + ')';
+          serverInfoDiv.classList.remove('hidden');
+          statusDiv.textContent = '✅ Сервер определён';
+        } else {
+          statusDiv.textContent = '❌ Не удалось определить сервер';
+        }
+        detectPort.disconnect();
+      }
+    });
+    detectPort.postMessage({ command: 'detectServer', url: baseUrl });
+  }).catch(() => {
+    statusDiv.textContent = 'Ошибка получения адреса';
   });
 }
 
@@ -480,6 +527,8 @@ document.getElementById('scanPathBtn').addEventListener('click', () => startScan
 document.getElementById('scanWPBtn').addEventListener('click', () => startScan('wp'));
 document.getElementById('scanPmaBtn').addEventListener('click', () => startScan('pma'));
 document.getElementById('scanDjangoBtn').addEventListener('click', () => startScan('django'));
+document.getElementById('scanIISBtn').addEventListener('click', () => startScan('iis'));
+document.getElementById('detectServerBtn').addEventListener('click', detectServer);
 
 initFilters();
 restoreLastResults();

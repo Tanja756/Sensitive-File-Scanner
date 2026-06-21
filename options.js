@@ -3,6 +3,7 @@ const defaults = {
   batchSize: 10,
   rateLimit: 0,
   useHead: true,
+  scanProtocol: 'https',
   categories: ['git', 'docker', 'cicd', 'cloud', 'cms', 'backup', 'logs', 'ide']
 };
 
@@ -27,6 +28,8 @@ async function restore() {
   document.getElementById('batchSize').value = config.batchSize;
   document.getElementById('rateLimit').value = config.rateLimit;
   document.getElementById('useHead').checked = config.useHead !== false;
+  const protoRadio = document.querySelector(`input[name="scanProtocol"][value="${config.scanProtocol || 'https'}"]`);
+  if (protoRadio) protoRadio.checked = true;
   document.querySelectorAll('.category').forEach(cb => {
     cb.checked = config.categories.includes(cb.dataset.cat);
   });
@@ -62,12 +65,13 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   const batchSize = parseInt(document.getElementById('batchSize').value, 10) || 10;
   const rateLimit = parseInt(document.getElementById('rateLimit').value, 10) || 0;
   const useHead = document.getElementById('useHead').checked;
+  const scanProtocol = document.querySelector('input[name="scanProtocol"]:checked')?.value || 'https';
   const categories = Array.from(document.querySelectorAll('.category:checked')).map(cb => cb.dataset.cat);
   const customWordlist = document.getElementById('customWordlist').value;
   const useCustomOnly = document.getElementById('useCustomOnly').checked;
 
   await browser.storage.local.set({
-    options: { timeout, batchSize, rateLimit, useHead, categories },
+    options: { timeout, batchSize, rateLimit, useHead, scanProtocol, categories },
     customWordlist,
     useCustomOnly
   });
